@@ -1,0 +1,890 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Vitrifi",
+  "scopeName": "source.vitrifi",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#use"
+    },
+    {
+      "include": "#feature-header"
+    },
+    {
+      "include": "#feature-body"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "begin": "//",
+          "end": "$",
+          "name": "comment.line.double-slash.vitrifi",
+          "patterns": [],
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.vitrifi"
+            }
+          }
+        },
+        {
+          "begin": "/\\*",
+          "end": "\\*/",
+          "name": "comment.block.vitrifi",
+          "patterns": [],
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.vitrifi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.vitrifi"
+            }
+          }
+        }
+      ]
+    },
+    "strings": {
+      "begin": "\"",
+      "end": "\"|(?=$)",
+      "name": "string.quoted.double.vitrifi",
+      "patterns": [
+        {
+          "match": "\\\\(?:[\"\\\\/bfnrt]|u[0-9A-Fa-f]{4})",
+          "name": "constant.character.escape.vitrifi"
+        },
+        {
+          "match": "\\\\(?:.|$)",
+          "name": "invalid.illegal.escape.vitrifi"
+        },
+        {
+          "match": "[\\x00-\\x1f]",
+          "name": "invalid.illegal.control-character.vitrifi"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.vitrifi"
+        }
+      }
+    },
+    "use": {
+      "begin": "\\buse\\b",
+      "end": ";",
+      "name": "meta.import.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "begin": "\\bas\\b",
+          "end": "(?=;)",
+          "name": "meta.import.alias.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+              "name": "entity.name.namespace.vitrifi"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.control.import.vitrifi"
+            }
+          }
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.control.import.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      }
+    },
+    "feature-header": {
+      "begin": "\\bfeature\\b",
+      "end": "(?=\\{)",
+      "name": "meta.feature.header.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "entity.name.namespace.vitrifi"
+        },
+        {
+          "match": "\\.",
+          "name": "punctuation.accessor.vitrifi"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "storage.type.feature.vitrifi"
+        }
+      }
+    },
+    "feature-body": {
+      "begin": "\\{",
+      "end": "\\}",
+      "name": "meta.feature.body.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#declarations"
+        },
+        {
+          "include": "#description"
+        },
+        {
+          "match": ";",
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.block.begin.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.block.end.vitrifi"
+        }
+      }
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\bexport\\b",
+          "name": "storage.modifier.export.vitrifi"
+        },
+        {
+          "include": "#type-declaration"
+        },
+        {
+          "include": "#resource-declaration"
+        },
+        {
+          "include": "#requirement-declaration"
+        },
+        {
+          "include": "#boundary"
+        },
+        {
+          "include": "#operation"
+        },
+        {
+          "include": "#check"
+        }
+      ]
+    },
+    "type-declaration": {
+      "begin": "\\btype\\b",
+      "end": ";",
+      "name": "meta.declaration.type.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "entity.name.type.vitrifi"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "storage.type.type.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      }
+    },
+    "resource-declaration": {
+      "begin": "\\bresource\\b",
+      "end": ";",
+      "name": "meta.declaration.resource.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "variable.other.readwrite.resource.vitrifi"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "storage.type.resource.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      }
+    },
+    "requirement-declaration": {
+      "begin": "\\brequirement\\b",
+      "end": ";",
+      "name": "meta.declaration.requirement.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "variable.other.constant.requirement.vitrifi"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "storage.type.requirement.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      }
+    },
+    "description": {
+      "begin": "\\b(?:purpose|question|cwd)\\b",
+      "end": ";",
+      "name": "meta.description.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.other.description.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      }
+    },
+    "boundary": {
+      "begin": "(?=\\bboundary\\b)",
+      "end": ";",
+      "name": "meta.declaration.boundary.vitrifi",
+      "patterns": [
+        {
+          "begin": "\\bboundary\\b",
+          "end": "(?=\\[)",
+          "name": "meta.boundary.header.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+              "name": "entity.name.type.class.boundary.vitrifi"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "storage.type.boundary.vitrifi"
+            }
+          }
+        },
+        {
+          "include": "#comments"
+        },
+        {
+          "begin": "\\[",
+          "end": "\\]",
+          "name": "meta.boundary.paths.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#strings"
+            },
+            {
+              "match": ",",
+              "name": "punctuation.separator.comma.vitrifi"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.brackets.begin.vitrifi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.brackets.end.vitrifi"
+            }
+          }
+        },
+        {
+          "begin": "\\ballows\\b",
+          "end": "(?=;)",
+          "name": "meta.boundary.allows.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "match": "\\[",
+              "name": "punctuation.section.brackets.begin.vitrifi"
+            },
+            {
+              "match": "\\]",
+              "name": "punctuation.section.brackets.end.vitrifi"
+            },
+            {
+              "match": ",",
+              "name": "punctuation.separator.comma.vitrifi"
+            },
+            {
+              "include": "#boundary-reference"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.control.relationship.vitrifi"
+            }
+          }
+        }
+      ],
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      }
+    },
+    "operation": {
+      "begin": "\\boperation\\b",
+      "end": "(?<=\\})|(?=;)",
+      "name": "meta.declaration.operation.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "begin": "\\(",
+          "end": "\\)",
+          "name": "meta.parameters.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "begin": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+              "end": "(?=,|\\))",
+              "name": "meta.parameter.vitrifi",
+              "patterns": [
+                {
+                  "include": "#comments"
+                },
+                {
+                  "match": ":",
+                  "name": "punctuation.separator.type.vitrifi"
+                },
+                {
+                  "include": "#types"
+                }
+              ],
+              "beginCaptures": {
+                "0": {
+                  "name": "variable.parameter.vitrifi"
+                }
+              }
+            },
+            {
+              "match": ",",
+              "name": "punctuation.separator.comma.vitrifi"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.begin.vitrifi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.end.vitrifi"
+            }
+          }
+        },
+        {
+          "begin": "->",
+          "end": "(?=\\{)",
+          "name": "meta.return-type.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#types"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.operator.arrow.vitrifi"
+            }
+          }
+        },
+        {
+          "begin": "\\{",
+          "end": "\\}",
+          "name": "meta.operation.body.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#description"
+            },
+            {
+              "include": "#binding"
+            },
+            {
+              "include": "#effects"
+            },
+            {
+              "include": "#calls"
+            },
+            {
+              "include": "#requirements"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.block.begin.vitrifi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.block.end.vitrifi"
+            }
+          }
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "entity.name.function.vitrifi"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "storage.type.operation.vitrifi"
+        }
+      }
+    },
+    "types": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "begin": "<",
+          "end": ">",
+          "name": "meta.type.arguments.vitrifi",
+          "patterns": [
+            {
+              "include": "#types"
+            },
+            {
+              "match": ",",
+              "name": "punctuation.separator.comma.vitrifi"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.typeparameters.begin.vitrifi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.typeparameters.end.vitrifi"
+            }
+          }
+        },
+        {
+          "match": "\\b(?:String|Int|Bool|Unit|Any|List|Option|Result)\\b",
+          "name": "support.type.primitive.vitrifi"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*\\.)",
+          "name": "entity.name.namespace.vitrifi"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "entity.name.type.vitrifi"
+        },
+        {
+          "match": "\\.",
+          "name": "punctuation.accessor.vitrifi"
+        }
+      ]
+    },
+    "binding": {
+      "begin": "\\bbind\\b",
+      "end": ";",
+      "name": "meta.binding.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "match": "\\bsymbol\\b",
+          "name": "keyword.other.binding.vitrifi"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "support.constant.language.vitrifi"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.other.binding.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      }
+    },
+    "effects": {
+      "begin": "\\beffects\\b",
+      "end": ";",
+      "name": "meta.effects.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "\\[",
+          "name": "punctuation.section.brackets.begin.vitrifi"
+        },
+        {
+          "match": "\\]",
+          "name": "punctuation.section.brackets.end.vitrifi"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.vitrifi"
+        },
+        {
+          "begin": "\\b(?:read|write|network|emit)\\b",
+          "end": "(?=,|\\])",
+          "name": "meta.effect.vitrifi",
+          "patterns": [
+            {
+              "include": "#resource-reference"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.operator.effect.vitrifi"
+            }
+          }
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.control.relationship.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      }
+    },
+    "calls": {
+      "begin": "\\b(?:calls)\\b",
+      "end": ";",
+      "name": "meta.calls.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "\\[",
+          "name": "punctuation.section.brackets.begin.vitrifi"
+        },
+        {
+          "match": "\\]",
+          "name": "punctuation.section.brackets.end.vitrifi"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.vitrifi"
+        },
+        {
+          "include": "#operation-reference"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.control.relationship.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      }
+    },
+    "requirements": {
+      "begin": "\\b(?:requires|ensures|covers)\\b",
+      "end": ";",
+      "name": "meta.requirements.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "\\[",
+          "name": "punctuation.section.brackets.begin.vitrifi"
+        },
+        {
+          "match": "\\]",
+          "name": "punctuation.section.brackets.end.vitrifi"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.vitrifi"
+        },
+        {
+          "include": "#requirement-reference"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.control.relationship.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      }
+    },
+    "operation-reference": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*\\.)",
+          "name": "entity.name.namespace.vitrifi"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "entity.name.function.vitrifi"
+        },
+        {
+          "match": "\\.",
+          "name": "punctuation.accessor.vitrifi"
+        }
+      ]
+    },
+    "resource-reference": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*\\.)",
+          "name": "entity.name.namespace.vitrifi"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "variable.other.readwrite.resource.vitrifi"
+        },
+        {
+          "match": "\\.",
+          "name": "punctuation.accessor.vitrifi"
+        }
+      ]
+    },
+    "requirement-reference": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*\\.)",
+          "name": "entity.name.namespace.vitrifi"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "variable.other.constant.requirement.vitrifi"
+        },
+        {
+          "match": "\\.",
+          "name": "punctuation.accessor.vitrifi"
+        }
+      ]
+    },
+    "boundary-reference": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*\\.)",
+          "name": "entity.name.namespace.vitrifi"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "entity.name.type.class.boundary.vitrifi"
+        },
+        {
+          "match": "\\.",
+          "name": "punctuation.accessor.vitrifi"
+        }
+      ]
+    },
+    "check": {
+      "begin": "\\bcheck\\b",
+      "end": "(?<=\\})|(?=;)",
+      "name": "meta.declaration.check.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "begin": "\\{",
+          "end": "\\}",
+          "name": "meta.check.body.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#description"
+            },
+            {
+              "include": "#requirements"
+            },
+            {
+              "begin": "\\brun\\b",
+              "end": ";",
+              "name": "meta.check.command.vitrifi",
+              "patterns": [
+                {
+                  "include": "#comments"
+                },
+                {
+                  "match": "\\[",
+                  "name": "punctuation.section.brackets.begin.vitrifi"
+                },
+                {
+                  "match": "\\]",
+                  "name": "punctuation.section.brackets.end.vitrifi"
+                },
+                {
+                  "match": ",",
+                  "name": "punctuation.separator.comma.vitrifi"
+                },
+                {
+                  "include": "#strings"
+                }
+              ],
+              "beginCaptures": {
+                "0": {
+                  "name": "keyword.other.check.vitrifi"
+                }
+              },
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.terminator.statement.vitrifi"
+                }
+              }
+            },
+            {
+              "begin": "\\btimeout\\b",
+              "end": ";",
+              "name": "meta.check.timeout.vitrifi",
+              "patterns": [
+                {
+                  "include": "#comments"
+                },
+                {
+                  "match": "\\b[0-9]+\\b",
+                  "name": "constant.numeric.integer.vitrifi"
+                }
+              ],
+              "beginCaptures": {
+                "0": {
+                  "name": "keyword.other.check.vitrifi"
+                }
+              },
+              "endCaptures": {
+                "0": {
+                  "name": "punctuation.terminator.statement.vitrifi"
+                }
+              }
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.block.begin.vitrifi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.block.end.vitrifi"
+            }
+          }
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "entity.name.function.check.vitrifi"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "storage.type.check.vitrifi"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+feature Checkout.AuditDelivery {
+  purpose "Describe the optional audit feature from a Ruby delivery worker to a Java audit service.";
+  question "What retry and deduplication guarantees should production audit delivery provide?";
+
+  type Event;
+  export resource Events;
+  export requirement AcceptedOnly "Rejected checkout events do not contact the audit client.";
+  export requirement NonNegative "A negative discount amount is rejected before an audit entry is appended.";
+
+  boundary Audit ["./*.java"] allows [];
+  boundary Worker ["../jobs/*.rb"] allows [Audit];
+
+  operation deliver(event: Event) -> Bool {
+    purpose "Forward accepted discounts through the host-supplied audit client.";
+    bind ruby "../jobs/discount_audit.rb" symbol "DiscountAudit.perform";
+    effects [write Events];
+    ensures [AcceptedOnly];
+    calls [record];
+  }
+
+  export operation record(cart: String, coupon: String, discount: Int) -> Unit {
+    purpose "Append a valid discount event to the in-memory audit fixture.";
+    bind java "./DiscountAudit.java" symbol "DiscountAudit.record";
+    effects [write Events];
+    ensures [NonNegative];
+  }
+
+  export operation entries() -> List<String> {
+    purpose "Return a copy of recorded audit entries.";
+    bind java "./DiscountAudit.java" symbol "DiscountAudit.entries";
+    effects [read Events];
+  }
+}
