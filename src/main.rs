@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
-use vitrifi::{compiler, evidence, model::*, review};
+use vitrifi::{compiler, evidence, java, model::*, review};
 
 const HELP:&str="Vitrifi — a compiled architecture language\n\nUsage: vitrifi <command> [feature.vitrifi] [--root DIR] [--json]\n\n  init       Create a feature-local source file\n  check      Compile and check a feature and its imported contracts (or all features)\n  compile    Emit the linked graph to .vitrifi/program.json (or --out FILE)\n  inspect    Read typed feature contracts in the terminal\n  source     Expand a bound implementation: source feature.vitrifi operation\n  review     Compare architecture declarations with a Git commit: --base REF\n  verify     Explicitly run declared verification commands\n  evidence   Inspect recorded evidence and detect stale inputs\n\nAll paths inside feature files are relative to that feature file.\nCompilation never executes feature source or verification commands.\n";
 
@@ -17,6 +17,13 @@ struct Args {
     json: bool,
     out: Option<PathBuf>,
     base: Option<String>,
+    java: bool,
+    check_generated: bool,
+    analyzer: Option<PathBuf>,
+    classpath_file: Option<PathBuf>,
+    source_root: Option<PathBuf>,
+    runner: Vec<String>,
+    timeout: Option<u64>,
 }
 fn arguments() -> Result<Args, String> {
     let mut args = Args {
@@ -26,6 +33,38 @@ fn arguments() -> Result<Args, String> {
     let mut it = env::args().skip(1);
     while let Some(value) = it.next() {
         match value.as_str() {
+            "--" => {
+                args.runner = it.collect();
+                break;
+            }
+            "--java" => args.java = true,
+            "--check" => args.check_generated = true,
+            "--java-analyzer" => {
+                args.analyzer = Some(
+                    it.next()
+                        .ok_or("--java-analyzer requires a JAR path")?
+                        .into(),
+                )
+            }
+            "--classpath-file" => {
+                args.classpath_file =
+                    Some(it.next().ok_or("--classpath-file requires a file")?.into())
+            }
+            "--source-root" => {
+                args.source_root = Some(
+                    it.next()
+                        .ok_or("--source-root requires a directory")?
+                        .into(),
+                )
+            }
+            "--timeout" => {
+                args.timeout = Some(
+                    it.next()
+                        .ok_or("--timeout requires seconds")?
+                        .parse()
+                        .map_err(|_| "Invalid --timeout")?,
+                )
+            }
             "--json" => args.json = true,
             "--root" => args.root = PathBuf::from(it.next().ok_or("--root requires a directory")?),
             "--out" => args.out = Some(PathBuf::from(it.next().ok_or("--out requires a file")?)),
@@ -163,9 +202,99 @@ fn inspect(program: &Program) {
 fn output(_args: &Args, value: &Value) {
     println!("{}", serde_json::to_string_pretty(value).unwrap());
 }
+
+fn java_options(args: &Args) -> Result<java::Options, String> {
+    let analyzer = args
+        .analyzer
+        .clone()
+        .or_else(|| env::var_os("VITRIFI_JAVA_ANALYZER").map(PathBuf::from))
+        .unwrap_or(env::current_dir().map_err(|e| e.to_string())?.join(format!(
+            "integrations/java/target/vitrifi-java-{}.jar",
+            env!("CARGO_PKG_VERSION")
+        )));
+    let java = env::var_os("VITRIFI_JAVA")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("JAVA_HOME").map(|p| PathBuf::from(p).join("bin/java")))
+        .unwrap_or_else(|| PathBuf::from("java"));
+    Ok(java::Options {
+        analyzer,
+        java,
+        classpath_file: args
+            .classpath_file
+            .clone()
+            .unwrap_or_else(|| "target/vitrifi-classpath.txt".into()),
+        source_root: args
+            .source_root
+            .clone()
+            .unwrap_or_else(|| "src/main/java".into()),
+    })
+}
+
+fn generated_entry(root: &Path, entry: Option<&Path>) -> Result<bool, String> {
+    let paths = if let Some(entry) = entry {
+        vec![if entry.is_absolute() {
+            entry.to_path_buf()
+        } else {
+            root.join(entry)
+        }]
+    } else {
+        compiler::repository_files(root)?
+            .into_iter()
+            .filter(|p| p.ends_with(".vitrifi"))
+            .map(|p| root.join(p))
+            .collect()
+    };
+    Ok(paths.into_iter().any(|p| {
+        fs::read_to_string(p).is_ok_and(|s| s.starts_with(vitrifi::derived::GENERATED_MARKER))
+    }))
+}
+
+fn execute_java(args: &Args, root: &Path) -> Result<u8, String> {
+    if args.command == "evidence" {
+        let result = java::evidence_status(root)?;
+        output(args, &result);
+        return Ok(if result["status"] == "passed" { 0 } else { 1 });
+    }
+    let options = java_options(args)?;
+    if args.command == "review" {
+        let result = java::review(
+            root,
+            &options,
+            args.base
+                .as_deref()
+                .ok_or("review requires --base <Git revision>")?,
+        )?;
+        output(args, &result);
+        return Ok(if result["status"] == "passed" { 0 } else { 1 });
+    }
+    let analysis = java::analyze(root, &options)?;
+    let result=match args.command.as_str() {
+        "generate" => java::generate(root,&analysis,args.check_generated)?,
+        "check" => java::generate(root,&analysis,true)?,
+        "inspect" | "compile" => {
+            let value=json!({"status":java::static_status(&analysis),"analysis":analysis});
+            if args.command=="compile" && java::static_status(&analysis)=="passed" {
+                if let Some(path)=&args.out {
+                    let target=if path.is_absolute(){path.clone()}else{root.join(path)};
+                    fs::write(target,serde_json::to_vec_pretty(&value).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+                } else {
+                    evidence::save(root,"program.json",&value)?;
+                }
+            }
+            value
+        },
+        "verify" => java::verify(root,&analysis,&args.runner,args.timeout.unwrap_or(120))?,
+        _ => return Err(format!("{} is not supported by the generated Java workflow; use generate, check, inspect, compile, review, verify, or evidence with --java",args.command)),
+    };
+    let passed = result["status"] == "passed";
+    output(args, &result);
+    Ok(if passed { 0 } else { 1 })
+}
+
 fn execute(args: &Args) -> Result<u8, String> {
     if args.command == "help" {
         print!("{HELP}");
+        println!("\nGenerated Java/Spring workflow (JDK 21+):\n  generate   Derive feature-local .vitrifi files from annotated Java source\n  generate --check  Check generated snapshots without writing\n  check/inspect/review/verify --java  Analyze implementation-derived facts\n\n  --java-analyzer JAR   Or VITRIFI_JAVA_ANALYZER\n  --classpath-file FILE   Defaults to target/vitrifi-classpath.txt inside --root\n  --source-root DIR       Defaults to src/main/java inside --root\n  verify --java -- COMMAND...  Explicit instrumented test command\n  --timeout SECONDS       Verification limit; defaults to 120\n\nGenerated .vitrifi snapshots automatically select Java analysis.\n");
         return Ok(0);
     }
     if args.command == "version" {
@@ -175,6 +304,15 @@ fn execute(args: &Args) -> Result<u8, String> {
     let root = args.root.canonicalize().map_err(|e| e.to_string())?;
     if !root.is_dir() {
         return Err("--root must name a directory".into());
+    }
+    if args.java
+        || args.command == "generate"
+        || (matches!(
+            args.command.as_str(),
+            "check" | "inspect" | "compile" | "review" | "verify" | "source" | "evidence"
+        ) && generated_entry(&root, args.entry.as_deref())?)
+    {
+        return execute_java(args, &root);
     }
     if args.command == "init" {
         let entry = args
