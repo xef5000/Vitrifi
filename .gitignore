@@ -1,0 +1,12 @@
+.venv/
+.vitrifi/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.DS_Store
+.toolchain/
+target/
+node_modules/
+*.vsix

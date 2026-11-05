@@ -1,0 +1,32 @@
+{
+  "Feature": {
+    "prefix": "feature",
+    "description": "Declare a feature beside its implementation",
+    "body": ["feature ${1:Checkout.Discounts} {", "  purpose \"${2:Describe this capability.}\";", "", "  $0", "}"]
+  },
+  "Import feature": {
+    "prefix": "use",
+    "description": "Import another feature's exported contract",
+    "body": "use \"${1:../storage/cart.vitrifi}\" as ${2:Store};"
+  },
+  "Operation": {
+    "prefix": "operation",
+    "description": "Declare a typed operation and its implementation binding",
+    "body": ["export operation ${1:apply}(${2:input}: ${3:String}) -> ${4:Unit} {", "  bind ${5|python,ruby,javascript,typescript,java|} \"${6:./implementation.py}\" symbol \"${7:apply}\";", "  effects [];", "  $0", "}"]
+  },
+  "Requirement": {
+    "prefix": "requirement",
+    "description": "Name an authored behavioral promise",
+    "body": "export requirement ${1:RejectNoWrite} \"${2:Rejected requests leave state unchanged.}\";"
+  },
+  "Boundary": {
+    "prefix": "boundary",
+    "description": "Declare permitted local implementation imports",
+    "body": "boundary ${1:Domain} [\"${2:./domain/*.py}\"] allows [${3:Store.Storage}];"
+  },
+  "Behavioral check": {
+    "prefix": "check",
+    "description": "Link an explicit verification command to requirements",
+    "body": ["check ${1:Behavior} {", "  run [\"${2:python3}\", \"${3:-m}\", \"${4:unittest}\"];", "  cwd \"${5:.}\";", "  covers [${6:RejectNoWrite}];", "  timeout ${7:30};", "}"]
+  }
+}

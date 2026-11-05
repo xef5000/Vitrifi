@@ -1,0 +1,68 @@
+{
+  "name": "vitrifi",
+  "displayName": "Vitrifi",
+  "description": "Syntax highlighting and editing support for the Vitrifi architecture language.",
+  "version": "0.2.0",
+  "publisher": "vitrifi-local",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "vitrifi",
+    "architecture",
+    "syntax"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xef5000/Vitrifi.git",
+    "directory": "editors/vscode"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "package": "node -e \"require('node:fs').mkdirSync('dist',{recursive:true})\" && vsce package --no-dependencies --skip-license --out dist/"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "vitrifi",
+        "aliases": [
+          "Vitrifi",
+          "vitrifi"
+        ],
+        "extensions": [
+          ".vitrifi"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "vitrifi",
+        "scopeName": "source.vitrifi",
+        "path": "./syntaxes/vitrifi.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "vitrifi",
+        "path": "./snippets/vitrifi.json"
+      }
+    ],
+    "configurationDefaults": {
+      "[vitrifi]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+      }
+    }
+  },
+  "devDependencies": {
+    "@vscode/vsce": "4.1.0",
+    "vscode-oniguruma": "2.0.1",
+    "vscode-textmate": "9.3.2"
+  }
+}

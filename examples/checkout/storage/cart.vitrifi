@@ -1,0 +1,28 @@
+feature Storage.Cart {
+  purpose "Own cart persistence and coupon lookup behind a small public interface.";
+
+  export type Cart;
+  export type Coupon;
+  export resource Carts;
+  export resource Coupons;
+
+  export boundary Storage ["./*.py"] allows [];
+
+  export operation load(cartId: String) -> Option<Cart> {
+    purpose "Read a copy of the requested cart.";
+    bind python "./repository.py" symbol "load_cart";
+    effects [read Carts];
+  }
+
+  export operation loadCoupon(code: String) -> Option<Coupon> {
+    purpose "Look up a coupon by its normalized code.";
+    bind python "./repository.py" symbol "load_coupon";
+    effects [read Coupons];
+  }
+
+  export operation save(cart: Cart) -> Unit {
+    purpose "Persist a cart and count the write for the acceptance fixture.";
+    bind python "./repository.py" symbol "save_cart";
+    effects [write Carts];
+  }
+}

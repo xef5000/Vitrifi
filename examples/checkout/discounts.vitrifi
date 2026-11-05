@@ -1,0 +1,69 @@
+use "./storage/cart.vitrifi" as Store;
+
+feature Checkout.Discounts {
+  purpose "Let customers apply one valid coupon to their own cart, from the browser form through persistence, without changing a rejected cart.";
+  question "Should customers be able to replace an existing coupon? The current policy rejects replacement.";
+  question "How should fixed-value coupons work across currencies? This fixture uses integer cents in one currency.";
+  question "Which authenticated service adapter connects the TypeScript handler to the Python workflow? The fixture leaves that wiring to the host.";
+
+  export type Receipt;
+  export type Rejected;
+  export type Response;
+  type Request;
+  type Service;
+  type Form;
+  type Client;
+  resource FormState;
+
+  export requirement AuthenticatedActor "The host supplies an authenticated actor id; a client-supplied id is insufficient.";
+  export requirement Owner "Only the cart owner can apply a coupon.";
+  export requirement RejectNoWrite "A rejected request performs no cart writes.";
+  export requirement NonNegative "An accepted coupon never makes the cart total negative.";
+  export requirement SingleCoupon "An existing coupon cannot be stacked with or replaced by another coupon.";
+  requirement FormRestored "The browser restores the submit button after success, rejection, or transport failure.";
+
+  boundary Domain ["./domain/*.py"] allows [Store.Storage];
+  boundary Workflow ["./workflow/*.py"] allows [Domain];
+  boundary Transport ["./transport/*.ts"] allows [Workflow];
+  boundary Browser ["./browser/*.js"] allows [Transport];
+
+  export operation applyCoupon(actor: String, cart: String, code: String) -> Result<Receipt, Rejected> {
+    purpose "Authorize, validate, and apply a coupon with one write after validation.";
+    bind python "./domain/discounts.py" symbol "apply_coupon";
+    effects [read Store.Carts, read Store.Coupons, write Store.Carts];
+    requires [AuthenticatedActor];
+    ensures [Owner, RejectNoWrite, NonNegative, SingleCoupon];
+    calls [Store.load, Store.loadCoupon, Store.save];
+  }
+
+  export operation applyDiscount(actor: String, cart: String, code: String) -> Response {
+    purpose "Translate domain acceptance or rejection into an application response envelope.";
+    bind python "./workflow/apply_discount.py" symbol "apply_discount";
+    effects [read Store.Carts, read Store.Coupons, write Store.Carts];
+    requires [AuthenticatedActor];
+    ensures [Owner, RejectNoWrite, NonNegative, SingleCoupon];
+    calls [applyCoupon];
+  }
+
+  operation handleCoupon(request: Request, service: Service) -> Response {
+    purpose "Reject blank request fields, then delegate to the host-supplied checkout service.";
+    bind typescript "./transport/checkout.ts" symbol "handleCoupon";
+    effects [read Store.Carts, read Store.Coupons, write Store.Carts];
+    calls [applyDiscount];
+  }
+
+  operation submitCoupon(form: Form, client: Client) -> Response {
+    purpose "Submit through the injected transport and make acceptance, rejection, and transport failure visible.";
+    bind javascript "./browser/coupon.js" symbol "submitCoupon";
+    effects [write FormState, read Store.Carts, read Store.Coupons, write Store.Carts];
+    ensures [FormRestored];
+    calls [handleCoupon];
+  }
+
+  check Behavior {
+    run ["python3", "-m", "unittest", "discover", "-s", "tests", "-v"];
+    cwd ".";
+    covers [Owner, RejectNoWrite, NonNegative, SingleCoupon];
+    timeout 30;
+  }
+}
