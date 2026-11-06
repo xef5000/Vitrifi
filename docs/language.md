@@ -2,6 +2,8 @@
 
 This reference covers the authored declaration language retained from v0.2. Vitrifi 0.3 also provides a [Java/Spring generation and verification workflow](java-spring.md): generated `.vitrifi` views use this vocabulary, while source analysis and runtime evidence establish the supported implementation relationships.
 
+The newer [`target feature` language](targets.md) has its own reference. It uses `.target.vitrifi` files, native Java type literals, table mappings, and class-based boundaries to constrain the implementation independently. Its syntax and checks differ from the declarations below.
+
 This describes the syntax and compiler behavior of the current prototype. Start with [Reading and writing Vitrifi](reading-vitrifi.md) for a guided walkthrough. The [checkout example](../examples/checkout/README.md) contains complete feature files and their implementations.
 
 Vitrifi describes architecture: named concepts, interfaces, promises, dependencies, and implementation locations. The compiler resolves and checks these relationships. The application still runs in its host language. Vitrifi has no executable expressions, variables, conditionals, loops, or function bodies.

@@ -2,10 +2,12 @@
 
 This example makes the Java implementation the source of structural facts. Vitrifi derives operation signatures, calls, and supported JDBC effects from Java source. A few annotations supply feature identity, a database resource name, and policies that the implementation must satisfy.
 
-There are no handwritten operation signatures or call lists to keep synchronized. The generated `.vitrifi` file remains the feature's review surface. Regenerate it when the Java implementation changes; edit the Java or its policy annotations to change the architecture.
+The generated `.vitrifi` file shows the implementation's structure. The neighboring authored `.target.vitrifi` file independently constrains the public API, resource mapping, allowed effects, dependency boundaries, and runtime policies. Regenerate the view when Java changes; change the target only when the intended architecture changes. Private helpers and call lists do not need to be mirrored in the target.
 
 ## What to read
 
+- [Checkout.Discounts.target.vitrifi](src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.target.vitrifi) is the architecture contract. The [target guide](../../docs/targets.md) explains each field and its enforcement.
+- [Checkout.Discounts.vitrifi](src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.vitrifi) is the generated implementation view.
 - [DiscountService.java](src/main/java/dev/vitrifi/example/checkout/DiscountService.java) owns the feature and its policies. It receives a `CartRepository` through its constructor.
 - [CartRepository.java](src/main/java/dev/vitrifi/example/checkout/CartRepository.java) is the injected interface.
 - [JdbcCartRepository.java](src/main/java/dev/vitrifi/example/checkout/JdbcCartRepository.java) is its Spring repository implementation. It contains the SQL that establishes the resource effects.
@@ -57,6 +59,8 @@ mvn install
 mvn -f examples/spring-checkout/pom.xml generate-resources
 cargo build
 
+./target/debug/vitrifi lint --root examples/spring-checkout
+./target/debug/vitrifi conform --root examples/spring-checkout
 ./target/debug/vitrifi generate --root examples/spring-checkout
 ./target/debug/vitrifi verify --java --root examples/spring-checkout -- mvn test
 ```
@@ -82,7 +86,9 @@ Run the verification command again. Rejection tests still catch `CouponRejected`
 
 Remove that added line and rerun verification. The normal implementation validates before its persistence call.
 
-For a second experiment, add a `carts.save(...)` call to `preview`. The write becomes visible to source analysis. If executed through the Spring proxy, the JDBC guard throws `PolicyViolationException` before the database executes the forbidden statement. Updating the generated file cannot grant permission; the policy remains in the Java annotation.
+For a second experiment, add a `carts.save(...)` call to `preview`. The write becomes visible to source analysis. If executed through the Spring proxy, the JDBC guard throws `PolicyViolationException` before the database executes the forbidden statement. Updating the generated file cannot grant permission. Even deleting `@Forbid` leaves the independent target prohibition in place and causes conformance to fail.
+
+`scripts/test-target-workflow.py` automates these experiments in a temporary copy, along with signature drift, undeclared public methods, feature-marker deletion, resource remapping, harmless helper extraction, unsupported dispatch, and missing runtime evidence. In CI, pass the target's explicit path to `conform` or `check` so its deletion also fails.
 
 ## What the evidence covers
 

@@ -1,11 +1,11 @@
 //! Java source analysis is an explicit compiler invocation, never an application run.
 use crate::{compiler, derived, derived_model::*};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
@@ -24,6 +24,39 @@ pub struct Analysis {
     pub revision: String,
     pub inputs: BTreeMap<String, String>,
     pub scope: Vec<String>,
+    pub selection: Option<Selection>,
+}
+
+/// Canonical input selections, separate from the hashes of their contents.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Selection {
+    pub source_root: PathBuf,
+    pub analyzer: PathBuf,
+    pub classpath_file: PathBuf,
+}
+
+/// Only explicitly requested selections constrain an evidence lookup.
+#[derive(Debug, Clone, Default)]
+pub struct EvidenceSelection {
+    pub source_root: Option<PathBuf>,
+    pub analyzer: Option<PathBuf>,
+    pub classpath_file: Option<PathBuf>,
+}
+
+/// Independent target obligations pinned to the evidence session by the CLI.
+/// Conformance must first establish the matching source/runtime annotations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetContext {
+    pub revision: String,
+    pub files: Vec<String>,
+    pub entries: Vec<TargetEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetEntry {
+    pub feature: String,
+    pub method: String,
+    pub policies: Vec<SourcePolicy>,
 }
 
 fn absolute(root: &Path, path: &Path) -> PathBuf {
@@ -32,6 +65,19 @@ fn absolute(root: &Path, path: &Path) -> PathBuf {
     } else {
         root.join(path)
     }
+}
+
+fn selection_destination(path: &Path) -> Result<String, String> {
+    path.canonicalize()
+        .map(|resolved| compiler::hash_bytes(resolved.as_os_str().as_encoded_bytes()))
+        .map_err(|e| e.to_string())
+}
+
+fn remember_selection(path: &Path, resolved: &Path, inputs: &mut BTreeMap<String, String>) {
+    inputs.insert(
+        format!("java-selection-path:{}", path.display()),
+        compiler::hash_bytes(resolved.as_os_str().as_encoded_bytes()),
+    );
 }
 
 fn hash_classpath(path: &Path, inputs: &mut BTreeMap<String, String>) -> Result<(), String> {
@@ -74,18 +120,52 @@ fn directory_digest(path: &Path) -> Result<String, String> {
     Ok(compiler::content_digest(&contents))
 }
 
-fn source_paths(root: &Path, options: &Options) -> Result<Vec<String>, String> {
-    let directory = absolute(root, &options.source_root)
-        .canonicalize()
-        .map_err(|_| {
+fn source_directory(root: &Path, source_root: &Path) -> Result<PathBuf, String> {
+    let requested = absolute(root, source_root);
+    let relative = requested
+        .strip_prefix(root)
+        .map_err(|_| "Java source directory must be inside --root")?;
+    let mut directory = root.to_path_buf();
+    for component in relative.components() {
+        match component {
+            Component::CurDir => continue,
+            Component::Normal(name) => directory.push(name),
+            _ => {
+                return Err(
+                    "Java source directory must not traverse outside its selected root".into(),
+                )
+            }
+        }
+        let metadata = fs::symlink_metadata(&directory).map_err(|_| {
             format!(
                 "Java source directory {} does not exist; set --source-root",
-                options.source_root.display()
+                source_root.display()
             )
         })?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Symlinked Java source roots are unsupported: {}",
+                directory.display()
+            ));
+        }
+    }
+    let directory = directory.canonicalize().map_err(|_| {
+        format!(
+            "Java source directory {} does not exist; set --source-root",
+            source_root.display()
+        )
+    })?;
     if !directory.starts_with(root) {
         return Err("Java source directory must be inside --root".into());
     }
+    if !directory.is_dir() {
+        return Err("Java source root must name a directory".into());
+    }
+    Ok(directory)
+}
+
+fn source_paths_under(root: &Path, source_root: &Path) -> Result<Vec<String>, String> {
+    let directory = source_directory(root, source_root)?;
     let mut paths = Vec::new();
     for path in compiler::repository_files(root)? {
         if path.ends_with(".java") && root.join(&path).starts_with(&directory) {
@@ -99,12 +179,27 @@ fn source_paths(root: &Path, options: &Options) -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
+fn source_paths(root: &Path, options: &Options) -> Result<Vec<String>, String> {
+    source_paths_under(root, &options.source_root)
+}
+
+fn source_set_digest(paths: &[String]) -> String {
+    // Encode the list rather than joining paths with a potentially valid filename byte.
+    compiler::hash_bytes(&serde_json::to_vec(paths).unwrap())
+}
+
 pub fn analyze(root: &Path, options: &Options) -> Result<Analysis, String> {
     let root = root.canonicalize().map_err(|e| e.to_string())?;
     let analyzer = absolute(&root, &options.analyzer).canonicalize()
         .map_err(|_| "Java analyzer JAR is missing; build integrations/java and set --java-analyzer or VITRIFI_JAVA_ANALYZER")?;
     let classpath_file = absolute(&root, &options.classpath_file);
-    let raw = fs::read_to_string(&classpath_file).map_err(|e| {
+    let resolved_classpath_file = classpath_file.canonicalize().map_err(|e| {
+        format!(
+            "Cannot resolve classpath {}: {e}; run the Maven build first",
+            classpath_file.display()
+        )
+    })?;
+    let raw = fs::read_to_string(&resolved_classpath_file).map_err(|e| {
         format!(
             "Cannot read classpath {}: {e}; run the Maven build first",
             classpath_file.display()
@@ -112,14 +207,10 @@ pub fn analyze(root: &Path, options: &Options) -> Result<Analysis, String> {
     })?;
     let mut classpath = Vec::new();
     let mut inputs = BTreeMap::new();
+    remember_selection(&absolute(&root, &options.analyzer), &analyzer, &mut inputs);
+    remember_selection(&classpath_file, &resolved_classpath_file, &mut inputs);
     inputs.insert(
-        format!(
-            "dependency:{}",
-            classpath_file
-                .canonicalize()
-                .map_err(|e| e.to_string())?
-                .display()
-        ),
+        format!("dependency:{}", resolved_classpath_file.display()),
         compiler::hash_bytes(raw.as_bytes()),
     );
     inputs.insert(
@@ -130,15 +221,34 @@ pub fn analyze(root: &Path, options: &Options) -> Result<Analysis, String> {
         if item.as_os_str().is_empty() {
             continue;
         }
-        let path = absolute(&root, &item)
+        let selected_path = absolute(&root, &item);
+        let path = selected_path
             .canonicalize()
             .map_err(|e| format!("Classpath {}: {e}", item.display()))?;
+        remember_selection(&selected_path, &path, &mut inputs);
         hash_classpath(&path, &mut inputs)?;
         classpath.push(path);
     }
     classpath.push(analyzer.clone());
     let classpath = std::env::join_paths(classpath).map_err(|e| e.to_string())?;
     let sources = source_paths(&root, options)?;
+    let source_directory = source_directory(&root, &options.source_root)?;
+    let selection = Selection {
+        source_root: source_directory.clone(),
+        analyzer: analyzer.clone(),
+        classpath_file: resolved_classpath_file,
+    };
+    inputs.insert(
+        format!(
+            "java-source-set:{}",
+            compiler::slash(
+                source_directory
+                    .strip_prefix(&root)
+                    .map_err(|e| e.to_string())?
+            )
+        ),
+        source_set_digest(&sources),
+    );
     for path in &sources {
         inputs.insert(
             path.clone(),
@@ -182,6 +292,11 @@ pub fn analyze(root: &Path, options: &Options) -> Result<Analysis, String> {
     // Include source content, analyzer, and the ordered classpath selection.
     let mut identity = BTreeMap::new();
     for (key, value) in &inputs {
+        // Canonical destinations pin local input selection, not portable source
+        // content identity. Their contents are fingerprinted independently.
+        if key.starts_with("java-selection-path:") {
+            continue;
+        }
         let key = if key.starts_with("dependency:") || key.starts_with("directory:") {
             format!("dependency:{value}")
         } else {
@@ -191,7 +306,7 @@ pub fn analyze(root: &Path, options: &Options) -> Result<Analysis, String> {
     }
     let revision = compiler::content_digest(&identity);
     let program = derived::build(source_analysis);
-    Ok(Analysis { program, revision, inputs, scope: vec![
+    Ok(Analysis { program, revision, inputs, selection: Some(selection), scope: vec![
         "Generated from javac-attributed Java sources with annotation processing disabled; application code is not executed.".into(),
         "Spring resolution covers supported source-visible constructor injection in this source set; unresolved dispatch remains explicit.".into(),
         "SQL effects cover recognized JdbcTemplate operations and ResourceTable mappings; unmodeled code prevents a complete static claim.".into(),
@@ -251,6 +366,67 @@ pub fn static_status(analysis: &Analysis) -> &'static str {
                 .is_empty()
         })
     {
+        "incomplete"
+    } else {
+        "passed"
+    }
+}
+
+fn target_operation_ids(
+    analysis: &Analysis,
+    target: &TargetContext,
+) -> Result<BTreeSet<String>, String> {
+    let mut selected = BTreeSet::new();
+    let mut queue = Vec::new();
+    for entry in &target.entries {
+        let matches: Vec<_> = analysis
+            .program
+            .operations
+            .iter()
+            .filter(|(_, operation)| {
+                operation.source.symbol == entry.method
+                    && operation
+                        .source
+                        .feature
+                        .as_ref()
+                        .is_some_and(|feature| feature.name == entry.feature)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if matches.len() != 1 {
+            return Err(format!(
+                "Expected one analyzed target entry {}, found {}",
+                entry.method,
+                matches.len()
+            ));
+        }
+        queue.extend(matches);
+    }
+    if queue.is_empty() {
+        return Err("Target verification requires at least one selected entry".into());
+    }
+    while let Some(id) = queue.pop() {
+        if !selected.insert(id.clone()) {
+            continue;
+        }
+        let operation = analysis
+            .program
+            .operations
+            .get(&id)
+            .ok_or_else(|| format!("Missing analyzed target dependency {id}"))?;
+        queue.extend(operation.callees.iter().cloned());
+    }
+    Ok(selected)
+}
+
+fn target_static_status(analysis: &Analysis, selected: &BTreeSet<String>) -> &'static str {
+    if !derived::scoped_diagnostics(&analysis.program, selected).is_empty() {
+        "failed"
+    } else if selected.iter().any(|id| {
+        !analysis.program.operations[id]
+            .reachable_unknowns
+            .is_empty()
+    }) {
         "incomplete"
     } else {
         "passed"
@@ -436,14 +612,48 @@ pub fn verify(
     runner: &[String],
     timeout: u64,
 ) -> Result<Value, String> {
+    verify_with_target(root, analysis, runner, timeout, None)
+}
+
+pub fn verify_with_target(
+    root: &Path,
+    analysis: &Analysis,
+    runner: &[String],
+    timeout: u64,
+    target: Option<&TargetContext>,
+) -> Result<Value, String> {
+    verify_with_target_selection(root, analysis, runner, timeout, target, None)
+}
+
+/// Pin automatic target discovery, including the empty selection, across execution.
+pub fn verify_with_target_selection(
+    root: &Path,
+    analysis: &Analysis,
+    runner: &[String],
+    timeout: u64,
+    target: Option<&TargetContext>,
+    expected_discovered: Option<&[PathBuf]>,
+) -> Result<Value, String> {
     if runner.is_empty() {
         return Err("Java verification requires an explicit test command after --".into());
     }
     if timeout == 0 || timeout > 3600 {
         return Err("--timeout must be 1..3600 seconds".into());
     }
-    if static_status(analysis) != "passed" {
-        return Ok(json!({"status":static_status(analysis),"executed":false,"analysis":analysis}));
+    let selected = target
+        .map(|target| target_operation_ids(analysis, target))
+        .transpose()?;
+    let static_result = selected
+        .as_ref()
+        .map(|ids| target_static_status(analysis, ids))
+        .unwrap_or_else(|| static_status(analysis));
+    if static_result != "passed" {
+        return Ok(json!({"status":static_result,"executed":false,"analysis":analysis}));
+    }
+    if !inputs_current(root, &analysis.inputs) || !discovery_current(root, expected_discovered) {
+        return Ok(
+            json!({"status":"stale","executed":false,"message":"Source, dependencies, or target selection changed before verification"}),
+        );
     }
     let workspace_revision = compiler::workspace_digest(root)?;
     let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
@@ -493,8 +703,22 @@ pub fn verify(
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok());
     let fresh = workspace_revision == compiler::workspace_digest(root)?
-        && inputs_current(root, &analysis.inputs);
-    let evidence_gaps = runtime_gaps(analysis, trace_value.as_ref(), &session_id);
+        && inputs_current(root, &analysis.inputs)
+        && discovery_current(root, expected_discovered);
+    let mut evidence_gaps = if target.is_some() {
+        runtime_gaps_scoped(
+            analysis,
+            trace_value.as_ref(),
+            &session_id,
+            selected.as_ref(),
+            target,
+        )
+    } else {
+        runtime_gaps(analysis, trace_value.as_ref(), &session_id)
+    };
+    if let Some(target) = target {
+        evidence_gaps.extend(target_runtime_gaps(target, trace_value.as_ref()));
+    }
     let evidence_valid = evidence_gaps.is_empty();
     let runtime_failed = trace_value.as_ref().is_some_and(|v| {
         v["status"] == "failed" || v["violations"].as_array().is_some_and(|a| !a.is_empty())
@@ -517,12 +741,74 @@ pub fn verify(
         .take(32000)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    let report = json!({"status":status,"fresh":fresh,"revision":analysis.revision,"workspace_revision":workspace_revision,"inputs":analysis.inputs,"command":runner,"exit_code":exit_code,"output":String::from_utf8_lossy(&bytes),"runtime":trace_value,"evidence_gaps":evidence_gaps,"scope":"Evidence for captured synchronous Spring/JDBC test executions. It does not prove unexecuted paths, bypassed data sources, asynchronous work, or external effects."});
+    let report = json!({"status":status,"fresh":fresh,"revision":analysis.revision,"workspace_revision":workspace_revision,"inputs":analysis.inputs,"selection":analysis.selection,"discovered_targets":expected_discovered,"command":runner,"exit_code":exit_code,"output":String::from_utf8_lossy(&bytes),"runtime":trace_value,"target":target,"evidence_gaps":evidence_gaps,"scope":"Evidence for captured synchronous Spring/JDBC test executions. It does not prove unexecuted paths, bypassed data sources, asynchronous work, or external effects."});
     crate::evidence::save(root, "java-evidence.json", &report)?;
     Ok(report)
 }
 
+fn target_runtime_gaps(target: &TargetContext, report: Option<&Value>) -> Vec<String> {
+    let mut gaps = Vec::new();
+    let invocations = report.and_then(|r| r["invocations"].as_array());
+    let coverage = report.and_then(|r| r["policy_coverage"].as_array());
+    for entry in &target.entries {
+        let matches = |v: &Value| v["feature"] == entry.feature && v["method"] == entry.method;
+        if !invocations.is_some_and(|items| {
+            items
+                .iter()
+                .any(|v| matches(v) && matches!(v["outcome"].as_str(), Some("returned" | "threw")))
+        }) {
+            gaps.push(format!(
+                "Target entry {} has no matching execution evidence",
+                entry.method
+            ));
+        }
+        for policy in &entry.policies {
+            let (kind, effect, needs_error) = match policy {
+                SourcePolicy::Forbid { effect } => ("forbid", effect, false),
+                SourcePolicy::NoEffectOnError { effect } => ("no_effect_on_error", effect, true),
+            };
+            let policy_matches = |v: &Value| {
+                v["kind"] == kind
+                    && v["action"] == effect.action
+                    && v["resource"] == effect.resource
+                    && v["status"] == "passed"
+            };
+            let covered =
+                coverage.is_some_and(|items| items.iter().any(|v| matches(v) && policy_matches(v)));
+            let exercised = invocations.is_some_and(|items| {
+                items.iter().any(|v| {
+                    matches(v)
+                        && (!needs_error || v["outcome"] == "threw")
+                        && v["policies"]
+                            .as_array()
+                            .is_some_and(|ps| ps.iter().any(policy_matches))
+                })
+            });
+            if !covered || !exercised {
+                gaps.push(format!(
+                    "Target policy {kind} {} {} on {} lacks matching {}evidence",
+                    effect.action,
+                    effect.resource,
+                    entry.method,
+                    if needs_error { "error-path " } else { "" }
+                ));
+            }
+        }
+    }
+    gaps
+}
+
 fn runtime_gaps(analysis: &Analysis, report: Option<&Value>, session: &str) -> Vec<String> {
+    runtime_gaps_scoped(analysis, report, session, None, None)
+}
+
+fn runtime_gaps_scoped(
+    analysis: &Analysis,
+    report: Option<&Value>,
+    session: &str,
+    selected: Option<&BTreeSet<String>>,
+    target: Option<&TargetContext>,
+) -> Vec<String> {
     let mut gaps = Vec::new();
     let Some(report) = report else {
         return vec!["Test command produced no valid runtime evidence".into()];
@@ -559,7 +845,18 @@ fn runtime_gaps(analysis: &Analysis, report: Option<&Value>, session: &str) -> V
         .unwrap_or_default();
     let mut checked = BTreeSet::new();
     for feature in analysis.program.features.values() {
+        if target.is_some_and(|target| {
+            !target
+                .entries
+                .iter()
+                .any(|entry| entry.feature == feature.name)
+        }) {
+            continue;
+        }
         for id in &feature.operations {
+            if selected.is_some_and(|ids| !ids.contains(id)) {
+                continue;
+            }
             let operation = &analysis.program.operations[id];
             let owner = operation
                 .source
@@ -613,8 +910,23 @@ fn runtime_gaps(analysis: &Analysis, report: Option<&Value>, session: &str) -> V
     gaps
 }
 
+fn discovery_current(root: &Path, expected: Option<&[PathBuf]>) -> bool {
+    expected.is_none_or(|expected| {
+        crate::targets::discover(root).is_ok_and(|actual| {
+            actual.into_iter().collect::<BTreeSet<_>>() == expected.iter().cloned().collect()
+        })
+    })
+}
+
 fn inputs_current(root: &Path, inputs: &BTreeMap<String, String>) -> bool {
     inputs.iter().all(|(key, hash)| {
+        if let Some(path) = key.strip_prefix("java-selection-path:") {
+            return selection_destination(Path::new(path)).is_ok_and(|current| current == *hash);
+        }
+        if let Some(source_root) = key.strip_prefix("java-source-set:") {
+            return source_paths_under(root, Path::new(source_root))
+                .is_ok_and(|paths| source_set_digest(&paths) == *hash);
+        }
         if let Some(directory) = key.strip_prefix("directory:") {
             return directory_digest(Path::new(directory)).is_ok_and(|s| s == *hash);
         }
@@ -627,6 +939,13 @@ fn inputs_current(root: &Path, inputs: &BTreeMap<String, String>) -> bool {
 }
 
 pub fn evidence_status(root: &Path) -> Result<Value, String> {
+    evidence_status_with_selection(root, &EvidenceSelection::default())
+}
+
+pub fn evidence_status_with_selection(
+    root: &Path,
+    requested: &EvidenceSelection,
+) -> Result<Value, String> {
     let mut report: Value = serde_json::from_slice(
         &fs::read(root.join(".vitrifi/java-evidence.json"))
             .map_err(|_| "No Java evidence; run verify --java")?,
@@ -634,9 +953,54 @@ pub fn evidence_status(root: &Path) -> Result<Value, String> {
     .map_err(|e| e.to_string())?;
     let inputs: BTreeMap<String, String> = serde_json::from_value(report["inputs"].clone())
         .map_err(|_| "Invalid Java evidence inputs")?;
+    let expected_discovered: Option<Vec<PathBuf>> = match report.get("discovered_targets") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            serde_json::from_value(value.clone())
+                .map_err(|_| "Invalid target discovery selection in evidence")?,
+        ),
+    };
+    let mut selection_gaps = Vec::new();
+    let saved: Option<Selection> = serde_json::from_value(report["selection"].clone()).ok();
+    for (name, requested_path, saved_path) in [
+        (
+            "source_root",
+            requested.source_root.as_ref(),
+            saved.as_ref().map(|s| &s.source_root),
+        ),
+        (
+            "analyzer",
+            requested.analyzer.as_ref(),
+            saved.as_ref().map(|s| &s.analyzer),
+        ),
+        (
+            "classpath_file",
+            requested.classpath_file.as_ref(),
+            saved.as_ref().map(|s| &s.classpath_file),
+        ),
+    ] {
+        let Some(requested_path) = requested_path else {
+            continue;
+        };
+        let actual = if name == "source_root" {
+            source_directory(root, requested_path)
+        } else {
+            absolute(root, requested_path)
+                .canonicalize()
+                .map_err(|e| e.to_string())
+        };
+        if actual.as_ref().ok() != saved_path {
+            selection_gaps.push(format!("Recorded evidence does not cover the requested Java {name} selection; run verify again"));
+        }
+    }
     let fresh = report["workspace_revision"].as_str()
         == Some(compiler::workspace_digest(root)?.as_str())
-        && inputs_current(root, &inputs);
+        && inputs_current(root, &inputs)
+        && discovery_current(root, expected_discovered.as_deref())
+        && selection_gaps.is_empty();
+    if !selection_gaps.is_empty() {
+        report["selection_gaps"] = json!(selection_gaps);
+    }
     report["fresh"] = json!(fresh);
     if !fresh {
         report["recorded_status"] = report["status"].clone();
@@ -676,10 +1040,12 @@ mod tests {
             program: derived::build(SourceAnalysis {
                 operations: vec![operation],
                 diagnostics: vec![],
+                inventory: None,
             }),
             revision: "revision".into(),
             inputs: BTreeMap::new(),
             scope: vec![],
+            selection: None,
         }
     }
 
@@ -689,6 +1055,270 @@ mod tests {
             "scenarios":[{"name":"invalid coupon","outcome":"passed"}],
             "invocations":[{"feature":"Checkout","method":"example.Checkout.apply()","scenario":"invalid coupon","outcome":"threw","events":[],"policies":[policy.clone()]}],
             "violations":[],"gaps":[],"policy_coverage":[policy]})
+    }
+
+    fn source_inputs(root: &Path) -> BTreeMap<String, String> {
+        let paths = source_paths_under(root, Path::new("src/main/java")).unwrap();
+        let mut inputs = BTreeMap::from([(
+            "java-source-set:src/main/java".into(),
+            source_set_digest(&paths),
+        )]);
+        for path in paths {
+            inputs.insert(
+                path.clone(),
+                compiler::hash_bytes(&fs::read(root.join(path)).unwrap()),
+            );
+        }
+        inputs
+    }
+
+    fn selected_target() -> TargetContext {
+        TargetContext {
+            revision: "target".into(),
+            files: vec![],
+            entries: vec![TargetEntry {
+                feature: "Checkout".into(),
+                method: "example.Checkout.apply()".into(),
+                policies: vec![],
+            }],
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_source_roots_and_ancestor_directories_are_rejected() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src/a")).unwrap();
+        fs::create_dir_all(root.join("src/b")).unwrap();
+        fs::write(root.join("src/a/App.java"), "class App {}\n").unwrap();
+        fs::write(root.join("src/b/App.java"), "class App { int changed; }\n").unwrap();
+        std::os::unix::fs::symlink("a", root.join("src/current")).unwrap();
+        assert!(source_paths_under(&root, Path::new("src/current"))
+            .unwrap_err()
+            .contains("Symlinked"));
+        fs::remove_file(root.join("src/current")).unwrap();
+        std::os::unix::fs::symlink("b", root.join("src/current")).unwrap();
+        assert!(source_paths_under(&root, Path::new("src/current")).is_err());
+        std::os::unix::fs::symlink("src", root.join("linked")).unwrap();
+        assert!(source_paths_under(&root, Path::new("linked/a")).is_err());
+        let selected = BTreeMap::from([(
+            "java-source-set:src/current".into(),
+            source_set_digest(&["src/a/App.java".into()]),
+        )]);
+        assert!(!inputs_current(&root, &selected));
+    }
+
+    #[test]
+    fn selected_target_scopes_unknowns_and_policies_to_reachable_operations() {
+        let mut analysis = analysis();
+        let selected = analysis
+            .program
+            .operations
+            .values()
+            .next()
+            .unwrap()
+            .source
+            .clone();
+        let mut other = selected.clone();
+        other.id = "Other.java::example.Other.run()".into();
+        other.symbol = "example.Other.run()".into();
+        other.path = "Other.java".into();
+        other.feature.as_mut().unwrap().name = "Other".into();
+        let write = ResourceEffect {
+            action: "write".into(),
+            resource: "OtherTable".into(),
+        };
+        other.policies = vec![SourcePolicy::Forbid {
+            effect: write.clone(),
+        }];
+        other.direct_effects = vec![write];
+        other.calls.push(SourceCall {
+            expression: "unknown.run()".into(),
+            line: 2,
+            column: 1,
+            target: None,
+            source_owner: None,
+            resolution: CallResolution::Unknown,
+            reason: "dynamic dispatch".into(),
+        });
+        analysis.program = derived::build(SourceAnalysis {
+            operations: vec![selected.clone(), other.clone()],
+            ..Default::default()
+        });
+        let target = selected_target();
+        let ids = target_operation_ids(&analysis, &target).unwrap();
+        assert_eq!(static_status(&analysis), "failed");
+        assert_eq!(target_static_status(&analysis, &ids), "passed");
+        assert!(!runtime_gaps(&analysis, Some(&report()), "session").is_empty());
+        assert!(runtime_gaps_scoped(
+            &analysis,
+            Some(&report()),
+            "session",
+            Some(&ids),
+            Some(&target)
+        )
+        .is_empty());
+        #[cfg(unix)]
+        {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let body = report()
+                .to_string()
+                .replace('\'', "'\\''")
+                .replace("\"session\"", "\"'\"$VITRIFI_SESSION_ID\"'\"");
+            let runner = vec![
+                "sh".into(),
+                "-c".into(),
+                format!("printf '%s\\n' '{body}' > \"$VITRIFI_TRACE_FILE\""),
+            ];
+            let verified = verify_with_target(&root, &analysis, &runner, 2, Some(&target)).unwrap();
+            assert_eq!(verified["status"], "passed", "{verified}");
+        }
+
+        let mut caller = selected;
+        caller.calls.push(SourceCall {
+            expression: "other.run()".into(),
+            line: 2,
+            column: 1,
+            target: Some(other.id.clone()),
+            source_owner: None,
+            resolution: CallResolution::Resolved,
+            reason: "source method".into(),
+        });
+        analysis.program = derived::build(SourceAnalysis {
+            operations: vec![caller.clone(), other.clone()],
+            ..Default::default()
+        });
+        let ids = target_operation_ids(&analysis, &target).unwrap();
+        assert_eq!(target_static_status(&analysis, &ids), "failed");
+        assert!(!runtime_gaps_scoped(
+            &analysis,
+            Some(&report()),
+            "session",
+            Some(&ids),
+            Some(&target)
+        )
+        .is_empty());
+        other.direct_effects.clear();
+        analysis.program = derived::build(SourceAnalysis {
+            operations: vec![caller, other],
+            ..Default::default()
+        });
+        let ids = target_operation_ids(&analysis, &target).unwrap();
+        assert_eq!(target_static_status(&analysis, &ids), "incomplete");
+    }
+
+    #[test]
+    fn target_scope_retains_global_compilation_diagnostics() {
+        let mut analysis = analysis();
+        analysis.program.diagnostics.push(crate::model::Diagnostic {
+            code: "JAVA_COMPILER_ERROR".into(),
+            message: "cannot compile another source".into(),
+            location: crate::model::Location {
+                path: "Other.java".into(),
+                line: 1,
+                column: 1,
+            },
+        });
+        let ids = target_operation_ids(&analysis, &selected_target()).unwrap();
+        assert_eq!(target_static_status(&analysis, &ids), "failed");
+    }
+
+    #[test]
+    fn first_discovered_target_blocks_generated_only_verification_before_runner() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::write(
+            root.join("Added.target.vitrifi"),
+            "target feature Added {}\n",
+        )
+        .unwrap();
+        let result = verify_with_target_selection(
+            &root,
+            &analysis(),
+            &["must-not-run".into()],
+            1,
+            None,
+            Some(&[]),
+        )
+        .unwrap();
+        assert_eq!(result["status"], "stale");
+        assert_eq!(result["executed"], false);
+    }
+
+    #[test]
+    fn source_inventory_tracks_additions_and_removals_only_within_the_selected_source_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src/main/java")).unwrap();
+        fs::write(root.join("src/main/java/App.java"), "class App {}\n").unwrap();
+        let inputs = source_inputs(&root);
+        assert!(inputs_current(&root, &inputs));
+
+        fs::create_dir_all(root.join("src/test/java")).unwrap();
+        fs::write(root.join("src/test/java/Test.java"), "class Test {}\n").unwrap();
+        fs::write(root.join("src/main/java/notes.txt"), "notes\n").unwrap();
+        assert!(inputs_current(&root, &inputs));
+
+        fs::write(root.join("src/main/java/Added.java"), "class Added {}\n").unwrap();
+        assert!(!inputs_current(&root, &inputs));
+        fs::remove_file(root.join("src/main/java/Added.java")).unwrap();
+        assert!(inputs_current(&root, &inputs));
+        fs::remove_file(root.join("src/main/java/App.java")).unwrap();
+        assert!(!inputs_current(&root, &inputs));
+    }
+
+    #[test]
+    fn existing_inputs_without_source_inventory_remain_readable() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::write(root.join("App.java"), "class App {}\n").unwrap();
+        let inputs = BTreeMap::from([("App.java".into(), compiler::hash_bytes(b"class App {}\n"))]);
+        assert!(inputs_current(&root, &inputs));
+        fs::write(root.join("App.java"), "class App { int changed; }\n").unwrap();
+        assert!(!inputs_current(&root, &inputs));
+    }
+
+    #[test]
+    fn source_added_after_analysis_blocks_verification_before_the_runner_starts() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src/main/java")).unwrap();
+        fs::write(root.join("src/main/java/App.java"), "class App {}\n").unwrap();
+        let mut analysis = analysis();
+        analysis.inputs = source_inputs(&root);
+        fs::write(root.join("src/main/java/Added.java"), "class Added {}\n").unwrap();
+
+        let result = verify_with_target(
+            &root,
+            &analysis,
+            &["this-command-must-not-be-started".into()],
+            1,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result["status"], "stale");
+        assert_eq!(result["executed"], false);
+    }
+
+    #[test]
+    fn evidence_lookup_rechecks_the_saved_source_inventory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src/main/java")).unwrap();
+        fs::write(root.join("src/main/java/App.java"), "class App {}\n").unwrap();
+        let inputs = source_inputs(&root);
+        fs::write(root.join("src/main/java/Added.java"), "class Added {}\n").unwrap();
+        // Even a workspace snapshot captured after an insertion must not make
+        // evidence for the earlier source selection appear current.
+        let report = json!({"status":"passed","inputs":inputs,
+            "workspace_revision":compiler::workspace_digest(&root).unwrap()});
+        crate::evidence::save(&root, "java-evidence.json", &report).unwrap();
+        let result = evidence_status(&root).unwrap();
+        assert_eq!(result["status"], "stale");
+        assert_eq!(result["recorded_status"], "passed");
+        assert_eq!(result["fresh"], false);
     }
 
     #[test]
@@ -719,5 +1349,46 @@ mod tests {
         let mut value = report();
         value["complete"] = json!(false);
         assert!(!runtime_gaps(&analysis, Some(&value), "session").is_empty());
+    }
+
+    #[test]
+    fn independent_target_obligations_require_matching_error_executions() {
+        let context = TargetContext {
+            revision: "target-digest".into(),
+            files: vec!["Checkout.target.vitrifi".into()],
+            entries: vec![TargetEntry {
+                feature: "Checkout".into(),
+                method: "example.Checkout.apply()".into(),
+                policies: vec![SourcePolicy::NoEffectOnError {
+                    effect: ResourceEffect {
+                        action: "write".into(),
+                        resource: "Carts".into(),
+                    },
+                }],
+            }],
+        };
+        assert!(target_runtime_gaps(&context, Some(&report())).is_empty());
+        let mut success_only = report();
+        success_only["invocations"][0]["outcome"] = json!("returned");
+        assert!(!target_runtime_gaps(&context, Some(&success_only)).is_empty());
+        let mut missing_policy = report();
+        missing_policy["policy_coverage"] = json!([]);
+        missing_policy["invocations"][0]["policies"] = json!([]);
+        assert!(!target_runtime_gaps(&context, Some(&missing_policy)).is_empty());
+    }
+
+    #[test]
+    fn every_target_entry_needs_an_invocation_even_without_an_error_policy() {
+        let context = TargetContext {
+            revision: "target".into(),
+            files: vec![],
+            entries: vec![TargetEntry {
+                feature: "Checkout".into(),
+                method: "example.Checkout.preview()".into(),
+                policies: vec![],
+            }],
+        };
+        assert!(!target_runtime_gaps(&context, Some(&report())).is_empty());
+        assert!(!target_runtime_gaps(&context, None).is_empty());
     }
 }

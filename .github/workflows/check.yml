@@ -32,10 +32,16 @@ jobs:
           cargo +stable build --locked
       - name: Check Java and Spring runtime
         run: mvn --batch-mode --no-transfer-progress install
+      - name: Check authored architecture target
+        run: |
+          ./target/debug/vitrifi lint --root examples/spring-checkout --target src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.target.vitrifi
+          ./target/debug/vitrifi conform --root examples/spring-checkout --target src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.target.vitrifi
       - name: Check generated feature freshness
         run: ./target/debug/vitrifi generate --check --root examples/spring-checkout
       - name: Exercise implementation mutations
         run: python3 scripts/test-java-workflow.py
+      - name: Exercise target conformance and runtime evidence
+        run: python3 scripts/test-target-workflow.py
       - name: Check original checkout behavior
         run: ./target/debug/vitrifi verify --root examples/checkout
       - name: Check syntax highlighting

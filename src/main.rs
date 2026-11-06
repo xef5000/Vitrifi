@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
-use vitrifi::{compiler, evidence, java, model::*, review};
+use vitrifi::{compiler, evidence, java, model::*, review, target, targets};
 
 const HELP:&str="Vitrifi — a compiled architecture language\n\nUsage: vitrifi <command> [feature.vitrifi] [--root DIR] [--json]\n\n  init       Create a feature-local source file\n  check      Compile and check a feature and its imported contracts (or all features)\n  compile    Emit the linked graph to .vitrifi/program.json (or --out FILE)\n  inspect    Read typed feature contracts in the terminal\n  source     Expand a bound implementation: source feature.vitrifi operation\n  review     Compare architecture declarations with a Git commit: --base REF\n  verify     Explicitly run declared verification commands\n  evidence   Inspect recorded evidence and detect stale inputs\n\nAll paths inside feature files are relative to that feature file.\nCompilation never executes feature source or verification commands.\n";
 
@@ -24,6 +24,7 @@ struct Args {
     source_root: Option<PathBuf>,
     runner: Vec<String>,
     timeout: Option<u64>,
+    targets: Vec<PathBuf>,
 }
 fn arguments() -> Result<Args, String> {
     let mut args = Args {
@@ -38,6 +39,11 @@ fn arguments() -> Result<Args, String> {
                 break;
             }
             "--java" => args.java = true,
+            "--target" => args.targets.push(
+                it.next()
+                    .ok_or("--target requires a .target.vitrifi path")?
+                    .into(),
+            ),
             "--check" => args.check_generated = true,
             "--java-analyzer" => {
                 args.analyzer = Some(
@@ -249,44 +255,233 @@ fn generated_entry(root: &Path, entry: Option<&Path>) -> Result<bool, String> {
     }))
 }
 
-fn execute_java(args: &Args, root: &Path) -> Result<u8, String> {
+fn evidence_selection(args: &Args) -> java::EvidenceSelection {
+    java::EvidenceSelection {
+        source_root: args.source_root.clone(),
+        analyzer: args
+            .analyzer
+            .clone()
+            .or_else(|| env::var_os("VITRIFI_JAVA_ANALYZER").map(PathBuf::from)),
+        classpath_file: args.classpath_file.clone(),
+    }
+}
+
+fn stale_target_selection() -> Value {
+    json!({"status":"stale","fresh":false,"executed":false,
+        "message":"Discovered target selection changed during this command; retry to check the new targets"})
+}
+
+fn execute_targets(args: &Args, root: &Path, paths: &[PathBuf]) -> Result<u8, String> {
+    if !matches!(
+        args.command.as_str(),
+        "lint" | "conform" | "check" | "inspect" | "compile" | "verify" | "evidence"
+    ) {
+        return Err(
+            "--target is supported by lint, conform, check, inspect, compile, verify, and evidence"
+                .into(),
+        );
+    }
+    let unrelated_entry = args
+        .entry
+        .as_ref()
+        .is_some_and(|path| !path.to_string_lossy().ends_with(".target.vitrifi"))
+        && !generated_entry(root, args.entry.as_deref())?;
+    if args.member.is_some() || unrelated_entry {
+        return Err("Target commands accept .target.vitrifi entries; remove the unrelated positional file or member".into());
+    }
+    let set = targets::load(root, paths)?;
+    let identity = json!({"revision":set.revision,"files":set.files});
+    if !set.diagnostics.is_empty() || args.command == "lint" {
+        let passed = set.diagnostics.is_empty();
+        output(
+            args,
+            &json!({"status":if passed {"passed"} else {"failed"},"target":identity,
+            "features":set.features,"diagnostics":set.diagnostics,"scope":"Target syntax and references only; implementation and runtime evidence are not checked by lint."}),
+        );
+        return Ok(if passed { 0 } else { 1 });
+    }
     if args.command == "evidence" {
-        let result = java::evidence_status(root)?;
+        let mut result = java::evidence_status_with_selection(root, &evidence_selection(args))?;
+        if result["target"]["revision"] != set.revision
+            || result["target"]["files"] != json!(set.files)
+        {
+            result["recorded_status"] = result["status"].clone();
+            result["status"] = json!("stale");
+            result["fresh"] = json!(false);
+            result["target_gap"] = json!("Recorded evidence does not cover the selected target revision and files; run verify --target again");
+        }
+        let passed = result["status"] == "passed";
+        output(args, &result);
+        return Ok(if passed { 0 } else { 1 });
+    }
+    let mut analysis = match java::analyze(root, &java_options(args)?) {
+        Ok(analysis) => analysis,
+        Err(message) => {
+            output(
+                args,
+                &json!({"status":"failed","target":identity,"diagnostics":[{
+                "code":"TARGET_ANALYSIS_FAILED","message":message}],"executed":false}),
+            );
+            return Ok(1);
+        }
+    };
+    let conformance = target::conform(&set.features, &analysis.program);
+    let mut result = json!({"status":conformance.status,"target":identity,"source_revision":analysis.revision,
+    "conformance":conformance,"scope":[
+        "Native public signatures, resource mappings, modeled effect bounds and source call-target boundaries are compared to authored targets.",
+        "Runtime policies still require fresh instrumented scenarios; static conformance does not establish business correctness."
+    ]});
+    if !set.current(root) {
+        result["status"] = json!("stale");
+        result["message"] = json!("Target changed during analysis; retry");
+    }
+    if args.command == "inspect" {
+        result["analysis"] = json!(analysis);
+        result["targets"] = json!(set.features);
+    }
+    if result["status"] == "passed" {
+        if args.command == "check" {
+            let generated = java::generate(root, &analysis, true)?;
+            if generated["status"] != "passed" {
+                result["status"] = generated["status"].clone();
+            }
+            result["generated"] = generated;
+        } else if args.command == "compile" {
+            result["analysis"] = json!(analysis);
+        } else if args.command == "verify" {
+            analysis.inputs.extend(set.inputs.clone());
+            let context = java::TargetContext {
+                revision: set.revision.clone(),
+                files: set.files.clone(),
+                entries: conformance
+                    .operations
+                    .iter()
+                    .map(|op| java::TargetEntry {
+                        feature: op.feature.clone(),
+                        method: op.binding.clone(),
+                        policies: op.policies.clone(),
+                    })
+                    .collect(),
+            };
+            let discovered: Vec<PathBuf> = set.files.iter().map(PathBuf::from).collect();
+            let automatic = args.targets.is_empty()
+                && !args
+                    .entry
+                    .as_ref()
+                    .is_some_and(|path| path.to_string_lossy().ends_with(".target.vitrifi"));
+            let mut verified = java::verify_with_target_selection(
+                root,
+                &analysis,
+                &args.runner,
+                args.timeout.unwrap_or(120),
+                Some(&context),
+                automatic.then_some(discovered.as_slice()),
+            )?;
+            verified["conformance"] = json!(conformance);
+            result = verified;
+        }
+    } else if args.command == "verify" {
+        result["executed"] = json!(false);
+    }
+    if !set.current(root) {
+        result["status"] = json!("stale");
+        result["fresh"] = json!(false);
+        result["message"] =
+            json!("Target contents or discovered selection changed during this command; retry");
+        if args.command == "verify" && result.get("workspace_revision").is_some() {
+            evidence::save(root, "java-evidence.json", &result)?;
+        }
+    }
+    let passed = result["status"] == "passed";
+    if passed && args.command == "compile" {
+        if let Some(path) = &args.out {
+            let output_path = if path.is_absolute() {
+                path.clone()
+            } else {
+                root.join(path)
+            };
+            fs::write(
+                output_path,
+                serde_json::to_vec_pretty(&result).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+        } else {
+            evidence::save(root, "program.json", &result)?;
+        }
+    }
+    output(args, &result);
+    Ok(if passed { 0 } else { 1 })
+}
+
+fn execute_java(args: &Args, root: &Path, expect_no_targets: bool) -> Result<u8, String> {
+    if args.command == "evidence" {
+        let mut result = java::evidence_status_with_selection(root, &evidence_selection(args))?;
+        if expect_no_targets && !targets::discover(root)?.is_empty() {
+            result = stale_target_selection();
+        }
         output(args, &result);
         return Ok(if result["status"] == "passed" { 0 } else { 1 });
     }
     let options = java_options(args)?;
     if args.command == "review" {
-        let result = java::review(
+        let mut result = java::review(
             root,
             &options,
             args.base
                 .as_deref()
                 .ok_or("review requires --base <Git revision>")?,
         )?;
+        result["target_changes"] = json!(targets::review_changes(
+            root,
+            args.base.as_deref().unwrap()
+        )?);
         output(args, &result);
         return Ok(if result["status"] == "passed" { 0 } else { 1 });
     }
     let analysis = java::analyze(root, &options)?;
-    let result=match args.command.as_str() {
+    if expect_no_targets && !targets::discover(root)?.is_empty() {
+        output(args, &stale_target_selection());
+        return Ok(1);
+    }
+    let mut result=match args.command.as_str() {
         "generate" => java::generate(root,&analysis,args.check_generated)?,
         "check" => java::generate(root,&analysis,true)?,
         "inspect" | "compile" => {
             let value=json!({"status":java::static_status(&analysis),"analysis":analysis});
-            if args.command=="compile" && java::static_status(&analysis)=="passed" {
-                if let Some(path)=&args.out {
-                    let target=if path.is_absolute(){path.clone()}else{root.join(path)};
-                    fs::write(target,serde_json::to_vec_pretty(&value).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
-                } else {
-                    evidence::save(root,"program.json",&value)?;
-                }
-            }
             value
         },
-        "verify" => java::verify(root,&analysis,&args.runner,args.timeout.unwrap_or(120))?,
+        "verify" => java::verify_with_target_selection(root,&analysis,&args.runner,args.timeout.unwrap_or(120),None,expect_no_targets.then_some(&[]))?,
         _ => return Err(format!("{} is not supported by the generated Java workflow; use generate, check, inspect, compile, review, verify, or evidence with --java",args.command)),
     };
+    if expect_no_targets && !targets::discover(root)?.is_empty() {
+        result["status"] = json!("stale");
+        result["fresh"] = json!(false);
+        result["message"] = stale_target_selection()["message"].clone();
+        if args.command == "verify" && result.get("workspace_revision").is_some() {
+            evidence::save(root, "java-evidence.json", &result)?;
+        }
+    }
+    if args.command == "generate" && !targets::discover(root)?.is_empty() {
+        result["target_conformance"] = json!("not_checked");
+        result["target_hint"] = json!("Generation updates implementation facts. Run conform or check with explicit --target paths to check architecture targets.");
+    }
     let passed = result["status"] == "passed";
+    if passed && args.command == "compile" {
+        if let Some(path) = &args.out {
+            let target = if path.is_absolute() {
+                path.clone()
+            } else {
+                root.join(path)
+            };
+            fs::write(
+                target,
+                serde_json::to_vec_pretty(&result).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+        } else {
+            evidence::save(root, "program.json", &result)?;
+        }
+    }
     output(args, &result);
     Ok(if passed { 0 } else { 1 })
 }
@@ -295,6 +490,7 @@ fn execute(args: &Args) -> Result<u8, String> {
     if args.command == "help" {
         print!("{HELP}");
         println!("\nGenerated Java/Spring workflow (JDK 21+):\n  generate   Derive feature-local .vitrifi files from annotated Java source\n  generate --check  Check generated snapshots without writing\n  check/inspect/review/verify --java  Analyze implementation-derived facts\n\n  --java-analyzer JAR   Or VITRIFI_JAVA_ANALYZER\n  --classpath-file FILE   Defaults to target/vitrifi-classpath.txt inside --root\n  --source-root DIR       Defaults to src/main/java inside --root\n  verify --java -- COMMAND...  Explicit instrumented test command\n  --timeout SECONDS       Verification limit; defaults to 120\n\nGenerated .vitrifi snapshots automatically select Java analysis.\n");
+        println!("Authored architecture targets:\n  lint --target FILE      Check a .target.vitrifi without Java or implementation\n  conform --target FILE   Compare authored constraints to Java source facts\n  verify --target FILE -- COMMAND...  Check conformance and target-linked evidence\n  --target FILE           Repeat to check several feature-local targets\n\ncheck, inspect, compile, verify and evidence discover .target.vitrifi files by default.\nUse explicit --target paths in CI so deleting a target cannot remove its obligations.\n");
         return Ok(0);
     }
     if args.command == "version" {
@@ -305,14 +501,50 @@ fn execute(args: &Args) -> Result<u8, String> {
     if !root.is_dir() {
         return Err("--root must name a directory".into());
     }
-    if args.java
-        || args.command == "generate"
-        || (matches!(
+    let mut target_paths = args.targets.clone();
+    if let Some(entry) = &args.entry {
+        if entry.to_string_lossy().ends_with(".target.vitrifi") {
+            target_paths.push(entry.clone());
+        }
+    }
+    // Resolve only the user's root spelling, not target files or descendants.
+    // This accepts root aliases (such as macOS /var) while read_inside still
+    // rejects symlinks and traversal within the selected root.
+    let supplied_root = if args.root.is_absolute() {
+        args.root.clone()
+    } else {
+        env::current_dir()
+            .map_err(|e| e.to_string())?
+            .join(&args.root)
+    };
+    for path in &mut target_paths {
+        if path.is_absolute() {
+            if let Ok(relative) = path.strip_prefix(&supplied_root) {
+                *path = relative.to_path_buf();
+            }
+        }
+    }
+    if !target_paths.is_empty() || matches!(args.command.as_str(), "lint" | "conform") {
+        return execute_targets(args, &root, &target_paths);
+    }
+    let generated = matches!(
+        args.command.as_str(),
+        "check" | "inspect" | "compile" | "review" | "verify" | "source" | "evidence"
+    ) && generated_entry(&root, args.entry.as_deref())?;
+    let explicit_legacy = args.entry.is_some() && !args.java && !generated;
+    let discover_targets = !explicit_legacy
+        && matches!(
             args.command.as_str(),
-            "check" | "inspect" | "compile" | "review" | "verify" | "source" | "evidence"
-        ) && generated_entry(&root, args.entry.as_deref())?)
-    {
-        return execute_java(args, &root);
+            "check" | "inspect" | "compile" | "verify" | "evidence"
+        );
+    if discover_targets {
+        let discovered = targets::discover(&root)?;
+        if !discovered.is_empty() {
+            return execute_targets(args, &root, &[]);
+        }
+    }
+    if args.java || args.command == "generate" || generated {
+        return execute_java(args, &root, discover_targets);
     }
     if args.command == "init" {
         let entry = args
@@ -355,13 +587,17 @@ fn execute(args: &Args) -> Result<u8, String> {
         return Ok(code);
     }
     if args.command == "review" {
-        let result = review::review(
+        let mut result = review::review(
             &root,
             args.base
                 .as_deref()
                 .ok_or("review requires --base <Git revision>")?,
             args.entry.as_deref(),
         )?;
+        result["target_changes"] = json!(targets::review_changes(
+            &root,
+            args.base.as_deref().unwrap()
+        )?);
         output(args, &result);
         return Ok(0);
     }

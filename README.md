@@ -1,14 +1,16 @@
 # Vitrifi
 
-**A generated architecture view, checked against the implementation.**
+**Architecture targets checked against code, with generated views for review.**
 
 Vitrifi 0.3 generates feature-local `.vitrifi` files from Java source and supported Spring wiring. Small annotations declare feature identity, resource names, and policies; the compiler derives signatures, dependencies, and recognized SQL effects. Reviewers can inspect the architectural consequences in the same PR as the implementation change.
 
 The Rust core combines a `javac` analysis adapter with explicit Spring/JDBC runtime verification. Unknown dependencies remain visible and prevent a complete check. Generated facts cannot grant themselves permission to violate an authored policy.
 
+Feature-local `.target.vitrifi` files now express independent design constraints: exact public Java interfaces, permitted effects, dependency boundaries, and runtime policies. `conform` compares those targets to source facts. The generated `.vitrifi` view still follows the implementation; regenerating it cannot widen a target. Start with the [target language and workflow guide](docs/targets.md).
+
 Open the [interactive explainer](site/index.html) in a browser for before/after examples, a guide to generated syntax, and the boundaries of each check. It is a small static site that works directly from disk; see [site/README.md](site/README.md).
 
-## Java/Spring: generate and verify
+## Java/Spring: design, conform, generate, verify
 
 With JDK 21+, Maven, and Rust installed, run from this repository:
 
@@ -16,6 +18,8 @@ With JDK 21+, Maven, and Rust installed, run from this repository:
 cargo build
 mvn install
 mvn -f examples/spring-checkout/pom.xml generate-resources
+./target/debug/vitrifi lint --root examples/spring-checkout
+./target/debug/vitrifi conform --root examples/spring-checkout
 ./target/debug/vitrifi generate --root examples/spring-checkout
 ./target/debug/vitrifi check --java --root examples/spring-checkout
 ./target/debug/vitrifi verify --java --root examples/spring-checkout -- mvn test
@@ -23,6 +27,8 @@ mvn -f examples/spring-checkout/pom.xml generate-resources
 ```
 
 The second Maven command prepares the standalone test classpath before Vitrifi fingerprints it. A dependency or classpath change during verification invalidates the evidence.
+
+`lint` needs only the target file and can run before implementation exists. `conform` checks the source against it; `check` also checks generated freshness; `verify` runs instrumented scenarios. These commands discover targets automatically. In CI, select each required file with `--target path/to/Feature.target.vitrifi` so deleting a target fails the check. Use repeated flags for several targets in the same Java application.
 
 The [Spring checkout example](examples/spring-checkout/README.md) uses a real service, interface-injected repository, `JdbcTemplate`, and H2 database. `@Forbid` rejects a reachable forbidden effect; `@NoEffectOnError` checks actual JDBC attempts on exercised error paths. Changing the host implementation is enough to change the generated architectural model.
 
@@ -33,6 +39,8 @@ Start with the [Java/Spring guide](docs/java-spring.md) for annotations, generat
 The v0.2 authored language remains available with Python, Ruby, JavaScript, TypeScript, and Java syntax adapters. Its checks validate declared relationships, binding existence, and resolved import boundaries. It does not provide the implementation agreement of the new Java/Spring workflow. Generation and runtime instrumentation for the other languages are future adapters.
 
 ## Learn to read Vitrifi
+
+For the current Java/Spring workflow, read [Architecture targets](docs/targets.md) for the authored constraints and the [Java/Spring guide](docs/java-spring.md) for generated facts and runtime evidence. Target files deliberately describe public contracts and bounds, leaving helper methods and call lists to generation.
 
 For the original authored syntax, start with [Reading and writing Vitrifi](docs/reading-vitrifi.md). It walks through a feature, explains types, resources, operations, and boundaries, and shows how to follow a promise into its implementation and tests.
 
@@ -119,7 +127,7 @@ cargo run -- compile --root examples/checkout --out /tmp/checkout.vitrifi.json
 
 JSON here is compiler output, not the authored language or source of truth. A future editor or graph view can consume that model without becoming necessary to review the feature.
 
-## What this prototype checks
+## What the earlier authored workflow checks
 
 - Parsing, declaration names, imports, export visibility, and reference kinds.
 - Nominal feature types and the arity of `List<T>`, `Option<T>`, and `Result<T, E>`.
@@ -136,7 +144,7 @@ The Python checkout path has seven acceptance checks. The JavaScript/TypeScript 
 
 The feature file has a small, explicit vocabulary: types, operations, requirements, resources, effects, calls, boundaries, and checks. Its compiler can reject invalid relationships without executing arbitrary feature-file code. Imports support separate ownership and reusable interfaces across a repository.
 
-Rust is the compiler implementation language. `.vitrifi` is the generated review format for Java/Spring and the authored language for the earlier adapters. The host application keeps its own language and toolchain. This separation lets a Ruby or Java repository adopt the same feature language without adding executable TypeScript definitions.
+Rust is the compiler implementation language. `.target.vitrifi` holds independent architecture constraints for Java/Spring; generated `.vitrifi` files show implementation facts. The earlier adapters retain the original authored `.vitrifi` language. The host application keeps its own language and toolchain.
 
 Distributed modules establish a path toward incremental analysis; they are not a claim of unlimited scale. The prototype loads an entry's transitive feature imports, or discovers all modules for a repository-wide check. Large-repository performance and incremental caches need separate measurement and work.
 
@@ -144,7 +152,7 @@ See [Reading and writing Vitrifi](docs/reading-vitrifi.md), the [syntax referenc
 
 ## VS Code syntax highlighting
 
-The [VS Code extension](editors/vscode/README.md) recognizes `.vitrifi` files and provides highlighting, comments, bracket pairing, folding, and declaration snippets. Install the generated `editors/vscode/dist/vitrifi-0.2.0.vsix` with **Extensions: Install from VSIX…**.
+The [VS Code extension](editors/vscode/README.md) recognizes both `.vitrifi` and `.target.vitrifi` files and provides highlighting, comments, bracket pairing, folding, and declaration snippets. Install the generated `editors/vscode/dist/vitrifi-0.3.0.vsix` with **Extensions: Install from VSIX…**.
 
 Its TextMate grammar can also be used as the basis for a future [GitHub Linguist contribution](https://github.com/github-linguist/linguist/blob/main/CONTRIBUTING.md#adding-a-language). GitHub registration is separate from installing the editor extension and requires an accepted grammar license, samples, and sufficient public usage.
 

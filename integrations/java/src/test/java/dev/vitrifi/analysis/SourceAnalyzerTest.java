@@ -78,6 +78,254 @@ class SourceAnalyzerTest {
         assertEquals(List.of(), result.get("diagnostics"), Json.write(result));
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> inventory(Map<String, Object> result) {
+        return (Map<String, Object>) result.get("inventory");
+    }
+
+    private Map<String, Object> sourceClass(Map<String, Object> result, String name) {
+        return list(inventory(result), "classes").stream().filter(c -> c.get("name").equals(name))
+                .findFirst().orElseThrow(() -> new AssertionError("Missing inventory class " + name));
+    }
+
+    @Test void inventory_keeps_public_entries_after_feature_marker_removal() throws Exception {
+        String source = """
+                package demo;
+                import dev.vitrifi.api.*;
+                @Feature("Checkout") class Checkout {
+                    public Checkout() {}
+                    public int run(int value) { return value; }
+                    public static long extra(long value) { return value; }
+                    private void helper() {}
+                }
+                """;
+        Map<String, Object> original = analyze(source);
+        Map<String, Object> removed = analyze(source.replace("@Feature(\"Checkout\") ", ""));
+        clean(original);
+        clean(removed);
+        assertEquals(2, inventory(original).get("version"));
+        assertEquals(sourceClass(original, "demo.Checkout"), sourceClass(removed, "demo.Checkout"));
+        assertEquals(List.of("demo.Checkout.extra(long)", "demo.Checkout.run(int)"),
+                sourceClass(removed, "demo.Checkout").get("public_methods"));
+        assertEquals(List.of(), sourceClass(removed, "demo.Checkout").get("unsupported_api"));
+        assertNull(operation(removed, "demo.Checkout.run(int)").get("feature"));
+        assertEquals("long", operation(removed, "demo.Checkout.extra(long)").get("returns"));
+    }
+
+    @Test void inventory_exposes_inherited_abstract_and_synthesized_public_api_as_unsupported() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                interface DefaultApi { default int inherited() { return 1; } }
+                class Parent { public static void inheritedStatic() {} public int parent() { return 2; } }
+                class Checkout extends Parent implements DefaultApi { public int own() { return 3; } }
+                abstract class AbstractApi { public abstract int run(); }
+                record GeneratedRecord(int value) {}
+                """);
+        clean(result);
+        Map<String, Object> checkout = sourceClass(result, "demo.Checkout");
+        assertEquals(List.of("demo.Checkout.own()"), checkout.get("public_methods"));
+        String gaps = checkout.get("unsupported_api").toString();
+        assertTrue(gaps.contains("demo.DefaultApi.inherited()"));
+        assertTrue(gaps.contains("demo.Parent.inheritedStatic()"));
+        assertTrue(gaps.contains("demo.Parent.parent()"));
+        assertFalse(gaps.contains("java.lang.Object"));
+        assertTrue(sourceClass(result, "demo.DefaultApi").get("unsupported_api").toString().contains("not a concrete class"));
+        assertTrue(sourceClass(result, "demo.AbstractApi").get("unsupported_api").toString().contains("not a concrete class"));
+        assertTrue(sourceClass(result, "demo.GeneratedRecord").get("unsupported_api").toString().contains("no analyzed source declaration"));
+    }
+
+    @Test void inventory_preserves_unused_resource_table_identity_when_the_friendly_name_changes() throws Exception {
+        String source = """
+                package demo;
+                import dev.vitrifi.api.*;
+                @ResourceTable(value="Carts", table="SHOP.CARTS") class Storage {}
+                class Checkout { public int run() { return 1; } }
+                """;
+        Map<String, Object> original = analyze(source);
+        Map<String, Object> renamed = analyze(source.replace("value=\"Carts\"", "value=\"Innocent\""));
+        clean(original);
+        clean(renamed);
+        assertEquals(List.of(Map.of("owner", "demo.Storage", "path", "demo/Checkout.java",
+                "table", "shop.carts", "resource", "Carts")), inventory(original).get("resources"));
+        assertEquals(List.of(Map.of("owner", "demo.Storage", "path", "demo/Checkout.java",
+                "table", "shop.carts", "resource", "Innocent")), inventory(renamed).get("resources"));
+        Map<String, Object> conflicting = analyze(source + "\n@ResourceTable(value=\"Other\", table=\"shop.carts\") class OtherStorage {}\n");
+        assertEquals(2, list(inventory(conflicting), "resources").size());
+        assertTrue(list(conflicting, "diagnostics").stream().anyMatch(d -> d.get("message").toString().contains("conflicting resources")));
+    }
+
+    @Test void native_types_keep_primitive_width_and_generic_arguments() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                import java.util.List;
+                class Checkout {
+                    public int width(int value) { return value; }
+                    public long width(long value) { return value; }
+                    public List<String> values(List<String> input) { return input; }
+                }
+                """);
+        clean(result);
+        assertEquals(List.of("demo.Checkout.values(java.util.List)", "demo.Checkout.width(int)", "demo.Checkout.width(long)"),
+                sourceClass(result, "demo.Checkout").get("public_methods"));
+        assertEquals("int", operation(result, "demo.Checkout.width(int)").get("returns"));
+        assertEquals("long", operation(result, "demo.Checkout.width(long)").get("returns"));
+        Map<String, Object> generic = operation(result, "demo.Checkout.values(java.util.List)");
+        assertEquals("java.util.List<java.lang.String>", generic.get("returns"));
+        assertEquals("java.util.List<java.lang.String>", list(generic, "parameters").getFirst().get("annotation"));
+    }
+
+    @Test void generic_type_variable_bounds_are_explicit_inventory_gaps() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                class GenericOwner<T extends Number> { public T value(T input) { return input; } }
+                class Checkout {
+                    public <T extends Number> T value() { return null; }
+                    public java.util.List<String> concrete(java.util.List<String> input) { return input; }
+                }
+                """);
+        clean(result);
+        assertTrue(sourceClass(result, "demo.GenericOwner").get("unsupported_api").toString()
+                .contains("class has unmodeled generic type parameter bounds"));
+        assertEquals(List.of("Public method has unmodeled generic type parameter bounds: demo.Checkout.value()"),
+                sourceClass(result, "demo.Checkout").get("unsupported_api"));
+        Map<String, Object> changed = analyze("""
+                package demo;
+                class Checkout { public <T extends java.io.Serializable> T value() { return null; } }
+                """);
+        clean(changed);
+        assertEquals(operation(result, "demo.Checkout.value()").get("returns"),
+                operation(changed, "demo.Checkout.value()").get("returns"));
+        assertFalse(((List<?>) sourceClass(changed, "demo.Checkout").get("unsupported_api")).isEmpty());
+    }
+
+    @Test void native_methods_cannot_look_like_complete_empty_effect_implementations() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                import dev.vitrifi.api.*;
+                @Feature("Checkout") class Checkout {
+                    public native int external();
+                    public int run() { return hidden(); }
+                    private native int hidden();
+                }
+                """);
+        clean(result);
+        assertEquals(List.of("Public native method has no analyzable Java body: demo.Checkout.external()"),
+                sourceClass(result, "demo.Checkout").get("unsupported_api"));
+        for (String name : List.of("external", "hidden")) {
+            assertTrue(list(operation(result, "demo.Checkout." + name + "()"), "calls").stream()
+                    .anyMatch(c -> c.get("resolution").equals("unknown") && c.get("expression").equals("unmodeled method body")));
+        }
+        assertEquals("demo/Checkout.java::demo.Checkout.hidden()", list(operation(result, "demo.Checkout.run()"), "calls").getFirst().get("target"));
+    }
+
+    @Test void nested_classes_have_separate_complete_public_method_inventories() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                class Checkout {
+                    public int run() { return 1; }
+                    public static class Nested { public static long extra() { return 2; } }
+                }
+                """);
+        clean(result);
+        assertEquals(List.of("demo.Checkout.run()"), sourceClass(result, "demo.Checkout").get("public_methods"));
+        assertEquals(List.of("demo.Checkout.Nested.extra()"), sourceClass(result, "demo.Checkout.Nested").get("public_methods"));
+        assertEquals("long", operation(result, "demo.Checkout.Nested.extra()").get("returns"));
+    }
+
+    @Test void public_static_entries_expose_initialization_gaps_without_an_analyzed_caller() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                import dev.vitrifi.api.*;
+                @Feature("Checkout") class Checkout {
+                    static { System.getenv("UNMODELED"); }
+                    public static int run() { return 1; }
+                }
+                class FieldEntry {
+                    static Object value = System.getenv("UNMODELED");
+                    public static int run() { return 1; }
+                }
+                class ConstantEntry {
+                    static final int value = 1;
+                    public static int run() { return value; }
+                }
+                """);
+        clean(result);
+        for (String name : List.of("Checkout", "FieldEntry")) {
+            assertEquals(List.of("Public static entry can trigger unmodeled class initialization: demo." + name + ".run()"),
+                    sourceClass(result, "demo." + name).get("unsupported_api"));
+            assertEquals(List.of(), operation(result, "demo." + name + ".run()").get("calls"));
+        }
+        assertEquals(List.of(), sourceClass(result, "demo.ConstantEntry").get("unsupported_api"));
+    }
+
+    @Test void static_entry_initialization_includes_superclasses_and_default_method_interfaces() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                class Parent { static { System.getenv("UNMODELED"); } }
+                class ParentEntry extends Parent { public static int run() { return 1; } }
+                interface DefaultInit {
+                    Object value = System.getenv("UNMODELED");
+                    default int helper() { return 1; }
+                }
+                interface Indirect extends DefaultInit {}
+                class DefaultEntry implements Indirect {
+                    public static int run() { return 1; }
+                    public int helper() { return 1; }
+                }
+                interface NoDefaultInit {
+                    Object value = System.getenv("NOT_INITIALIZED_BY_CLASS");
+                    void consume();
+                }
+                class NoDefaultEntry implements NoDefaultInit {
+                    public static int run() { return 1; }
+                    public void consume() {}
+                }
+                """);
+        clean(result);
+        for (String name : List.of("ParentEntry", "DefaultEntry")) {
+            assertEquals(List.of("Public static entry can trigger unmodeled class initialization: demo." + name + ".run()"),
+                    sourceClass(result, "demo." + name).get("unsupported_api"));
+        }
+        assertEquals(List.of(), sourceClass(result, "demo.NoDefaultEntry").get("unsupported_api"));
+    }
+
+    @Test void public_generic_and_covariant_overrides_expose_unmodeled_bridges() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                interface Convert<T> { T convert(T value); }
+                interface Strings extends Convert<String> {}
+                class GenericEntry implements Strings {
+                    public String convert(String value) { return value; }
+                }
+                class Parent { public Number value() { return null; } }
+                class CovariantEntry extends Parent { public Integer value() { return null; } }
+                class ExternalEntry implements java.util.function.Function<String, String> {
+                    public String apply(String value) { return value; }
+                }
+                """);
+        clean(result);
+        assertEquals(List.of("demo.GenericEntry.convert(java.lang.String)"),
+                sourceClass(result, "demo.GenericEntry").get("public_methods"));
+        assertEquals(List.of("Public override requires an unmodeled compiler bridge: demo.GenericEntry.convert(java.lang.String) overrides demo.Convert.convert(java.lang.Object)"),
+                sourceClass(result, "demo.GenericEntry").get("unsupported_api"));
+        assertEquals(List.of("Public override requires an unmodeled compiler bridge: demo.CovariantEntry.value() overrides demo.Parent.value()"),
+                sourceClass(result, "demo.CovariantEntry").get("unsupported_api"));
+        assertTrue(sourceClass(result, "demo.ExternalEntry").get("unsupported_api").toString()
+                .contains("demo.ExternalEntry.apply(java.lang.String) overrides java.util.function.Function.apply(java.lang.Object)"));
+    }
+
+    @Test void ordinary_overrides_do_not_fabricate_bridge_gaps() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                interface Api { Number value(); }
+                class PlainEntry implements Api { public Number value() { return null; } }
+                class OverrideEntry extends PlainEntry { public Number value() { return null; } }
+                """);
+        clean(result);
+        assertEquals(List.of(), sourceClass(result, "demo.PlainEntry").get("unsupported_api"));
+        assertEquals(List.of(), sourceClass(result, "demo.OverrideEntry").get("unsupported_api"));
+    }
+
     @Test void resolves_real_spring_injection_jdbc_effects_and_row_mapper_body() throws Exception {
         Map<String, Object> result = analyze(CHECKOUT);
         clean(result);
@@ -338,6 +586,46 @@ class SourceAnalyzerTest {
                 .anyMatch(c -> "demo/Checkout.java::demo.Cart.total()".equals(c.get("target"))));
         assertEquals("demo/Checkout.java::demo.Effects.write()", list(operation(result, "demo.Cart.total()"), "calls").getFirst().get("target"));
         assertEquals(List.of(Map.of("action", "write", "resource", "Carts")), operation(result, "demo.Effects.write()").get("direct_effects"));
+    }
+
+    @Test void summarized_record_calls_retain_source_owners_without_changing_effect_summaries() throws Exception {
+        Map<String, Object> result = analyze(CHECKOUT);
+        clean(result);
+        Map<String, Object> apply = operation(result, "demo.Checkout.apply(java.lang.String)");
+        List<Map<String, Object>> accessors = list(apply, "calls").stream()
+                .filter(c -> c.get("expression").equals("cart.total")).toList();
+        assertEquals(2, accessors.size());
+        for (Map<String, Object> call : accessors) {
+            assertEquals("intrinsic", call.get("resolution"));
+            assertEquals("demo.Cart", call.get("source_owner"));
+            assertNull(call.get("target"));
+        }
+        Map<String, Object> callback = operation(result, "demo.SqlRepo.load(java.lang.String)$rowMapper1");
+        Map<String, Object> construction = list(callback, "calls").stream()
+                .filter(c -> c.get("expression").equals("new Cart")).findFirst().orElseThrow();
+        assertEquals("intrinsic", construction.get("resolution"));
+        assertEquals("demo.Cart", construction.get("source_owner"));
+        assertNull(construction.get("target"));
+        assertEquals(List.of(), callback.get("direct_effects"));
+        assertTrue(list(apply, "calls").stream().filter(c -> c.get("expression").equals("Math.max")
+                || c.get("expression").equals("new IllegalArgumentException")).allMatch(c -> !c.containsKey("source_owner")));
+        assertTrue(list(callback, "calls").stream().filter(c -> c.get("expression").toString().startsWith("rs."))
+                .allMatch(c -> !c.containsKey("source_owner")));
+    }
+
+    @Test void summarized_nested_record_calls_use_the_canonical_source_owner() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                class Values { record Cart(int total) {} }
+                class Checkout {
+                    public int run(Values.Cart cart) { return new Values.Cart(cart.total()).total(); }
+                }
+                """);
+        clean(result);
+        List<Map<String, Object>> calls = list(operation(result, "demo.Checkout.run(demo.Values.Cart)"), "calls");
+        assertEquals(3, calls.size());
+        assertTrue(calls.stream().allMatch(c -> c.get("resolution").equals("intrinsic")
+                && c.get("source_owner").equals("demo.Values.Cart") && c.get("target") == null), Json.write(calls));
     }
 
     @Test void shared_sql_classifier_rejects_hidden_tables_sequences_and_functions() {

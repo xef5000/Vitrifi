@@ -38,6 +38,10 @@ def main():
         app = checkout / "examples/spring-checkout"
         shutil.copytree(repo / "examples/spring-checkout", app,
                         ignore=shutil.ignore_patterns("target", ".vitrifi"))
+        # Exercise generated-only compatibility separately from authored-target
+        # acceptance tests in test-target-workflow.py.
+        for target in app.rglob("*.target.vitrifi"):
+            target.unlink()
         (app / "target").mkdir()
         shutil.copy2(repo / "examples/spring-checkout/target/vitrifi-classpath.txt",
                      app / "target/vitrifi-classpath.txt")
