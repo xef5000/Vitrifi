@@ -89,7 +89,7 @@ fn diagnostic(code: &str, message: impl Into<String>, location: &Location) -> Di
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     Word(String),
     String(String),
     Punct(char),
@@ -98,12 +98,12 @@ enum Kind {
 }
 
 #[derive(Debug, Clone)]
-struct Token {
-    kind: Kind,
-    at: Location,
+pub(crate) struct Token {
+    pub(crate) kind: Kind,
+    pub(crate) at: Location,
 }
 
-fn tokenize(path: &str, source: &str) -> Result<Vec<Token>, Diagnostic> {
+pub(crate) fn tokenize(path: &str, source: &str) -> Result<Vec<Token>, Diagnostic> {
     let mut offset = 0;
     let mut line = 1;
     let mut column = 1;
@@ -201,7 +201,7 @@ fn tokenize(path: &str, source: &str) -> Result<Vec<Token>, Diagnostic> {
             bump(&mut offset, &mut line, &mut column);
             bump(&mut offset, &mut line, &mut column);
             Kind::Arrow
-        } else if "{}[](),;:.".contains(first) {
+        } else if "{}[](),;:.=".contains(first) {
             bump(&mut offset, &mut line, &mut column);
             Kind::Punct(first)
         } else {
@@ -390,6 +390,11 @@ impl Parser {
                         .into_iter()
                         .map(|effect| SourcePolicy::Forbid { effect }),
                 ),
+                "no_effect_on_rejection" => policies.extend(
+                    self.effects()?
+                        .into_iter()
+                        .map(|effect| SourcePolicy::NoEffectOnRejection { effect }),
+                ),
                 "no_effect_on_error" => policies.extend(
                     self.effects()?
                         .into_iter()
@@ -529,7 +534,7 @@ fn normalized(value: &str) -> String {
 /// Parse the supported native type literals and derive their erased binding name.
 /// Unbound type variables and type-use annotations need adapter semantics we do
 /// not have; rejecting them is safer than guessing their erasure.
-fn native_type(value: &str, allow_void: bool) -> Result<String, String> {
+pub(crate) fn native_type(value: &str, allow_void: bool) -> Result<String, String> {
     struct TypeParser<'a> {
         source: &'a str,
         offset: usize,
@@ -638,7 +643,7 @@ fn native_type(value: &str, allow_void: bool) -> Result<String, String> {
     Ok(erased)
 }
 
-fn binding_parts(binding: &str) -> Option<(&str, &str, &str)> {
+pub(crate) fn binding_parts(binding: &str) -> Option<(&str, &str, &str)> {
     let (prefix, arguments) = binding.split_once('(')?;
     let arguments = arguments.strip_suffix(')')?;
     if arguments.contains(['(', ')']) {
@@ -660,7 +665,7 @@ fn source_owner(symbol: &str) -> Option<&str> {
         .map(|(owner, _)| owner)
 }
 
-fn tables_may_alias(left: &str, right: &str) -> bool {
+pub(crate) fn tables_may_alias(left: &str, right: &str) -> bool {
     left == right
         || ((!left.contains('.') || !right.contains('.'))
             && left.rsplit('.').next() == right.rsplit('.').next())
@@ -668,7 +673,9 @@ fn tables_may_alias(left: &str, right: &str) -> bool {
 
 fn policy_effect(policy: &SourcePolicy) -> &ResourceEffect {
     match policy {
-        SourcePolicy::Forbid { effect } | SourcePolicy::NoEffectOnError { effect } => effect,
+        SourcePolicy::Forbid { effect }
+        | SourcePolicy::NoEffectOnError { effect }
+        | SourcePolicy::NoEffectOnRejection { effect } => effect,
     }
 }
 
@@ -1382,7 +1389,8 @@ pub fn conform(targets: &[TargetFeature], program: &DerivedProgram) -> Conforman
                         (PolicyStatus::Unknown, Vec::new())
                     }
                     SourcePolicy::Forbid { .. } => (PolicyStatus::Passed, Vec::new()),
-                    SourcePolicy::NoEffectOnError { .. } => {
+                    SourcePolicy::NoEffectOnError { .. }
+                    | SourcePolicy::NoEffectOnRejection { .. } => {
                         (PolicyStatus::RuntimeRequired, Vec::new())
                     }
                 };

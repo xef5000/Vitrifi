@@ -1,5 +1,7 @@
 # Generated features from Java and Spring
 
+For executable orchestration that generates a Spring service, see the [compiled workflow language](workflows.md). Its syntax and guarantees are separate from authored targets and generated implementation views.
+
 Vitrifi 0.3 derives feature views from real Java source. You annotate feature identity, resource names, and intended policies. The tool obtains method signatures and supported call relationships from `javac`, resolves a bounded set of Spring injection patterns, and recognizes supported SQL effects. It generates the `.vitrifi` review file beside the feature's Java implementation.
 
 This is the first implementation of the generated workflow. The earlier [authored language](language.md) and its five syntax adapters remain available. Generation and instrumented verification currently support the Java/Spring integration described here; they are not yet implemented for the other host languages.

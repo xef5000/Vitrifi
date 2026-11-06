@@ -49,3 +49,5 @@ The tests run the real VS Code TextMate/Oniguruma tokenizer against grammar fixt
 This is a declarative language extension: it has no activation script and does not launch the Vitrifi compiler or execute verification commands. Compiler diagnostics and navigation would be a separate language-server integration.
 
 The grammar is reusable by TextMate-compatible tools. GitHub.com requires separate registration through GitHub Linguist; installing this extension does not change GitHub's rendering.
+
+Version 0.4.0 also highlights compiled workflow declarations, native action signatures, bindings, branches, calls, returns, rejection and `no_effect_on_rejection`. See the [workflow guide](../../docs/workflows.md).

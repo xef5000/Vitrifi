@@ -189,6 +189,33 @@ fn source_set_digest(paths: &[String]) -> String {
 }
 
 pub fn analyze(root: &Path, options: &Options) -> Result<Analysis, String> {
+    analyze_with_workflows(root, options, crate::workflows::load(root, &[])?)
+}
+
+pub fn analyze_with_workflows(
+    root: &Path,
+    options: &Options,
+    workflows: crate::workflows::WorkflowSet,
+) -> Result<Analysis, String> {
+    let workflow_selection = crate::workflows::selection_digest(root)?;
+    workflows.fresh(root, options)?;
+    let mut analysis = analyze_compiled(root, options, &BTreeMap::new())?;
+    workflows.validate(&analysis)?;
+    if !workflows.current(root) || workflow_selection != crate::workflows::selection_digest(root)? {
+        return Err("Workflows changed during analysis; retry".into());
+    }
+    analysis.inputs.extend(workflows.inputs);
+    analysis
+        .inputs
+        .insert("workflow-selection".into(), workflow_selection);
+    Ok(analysis)
+}
+
+pub(crate) fn analyze_compiled(
+    root: &Path,
+    options: &Options,
+    replacements: &BTreeMap<String, String>,
+) -> Result<Analysis, String> {
     let root = root.canonicalize().map_err(|e| e.to_string())?;
     let analyzer = absolute(&root, &options.analyzer).canonicalize()
         .map_err(|_| "Java analyzer JAR is missing; build integrations/java and set --java-analyzer or VITRIFI_JAVA_ANALYZER")?;
@@ -257,12 +284,39 @@ pub fn analyze(root: &Path, options: &Options) -> Result<Analysis, String> {
     }
     let temporary = tempfile::tempdir().map_err(|e| e.to_string())?;
     let manifest = temporary.path().join("sources.txt");
-    fs::write(&manifest, sources.join("\n")).map_err(|e| e.to_string())?;
+    let overlay = temporary.path().join("source");
+    let execution_root = if replacements.is_empty() {
+        root.clone()
+    } else {
+        fs::create_dir_all(&overlay).map_err(|e| e.to_string())?;
+        for path in sources
+            .iter()
+            .chain(replacements.keys())
+            .collect::<BTreeSet<_>>()
+        {
+            let destination = overlay.join(path);
+            fs::create_dir_all(destination.parent().unwrap()).map_err(|e| e.to_string())?;
+            let source = match replacements.get(path) {
+                Some(source) => source.clone(),
+                None => compiler::read_inside(&root, path)?,
+            };
+            fs::write(destination, source).map_err(|e| e.to_string())?;
+        }
+        overlay
+    };
+    let compiled_sources = sources
+        .iter()
+        .chain(replacements.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    fs::write(&manifest, compiled_sources.join("\n")).map_err(|e| e.to_string())?;
     let output = Command::new(&options.java)
         .args(["-jar"])
         .arg(&analyzer)
         .arg("--root")
-        .arg(&root)
+        .arg(&execution_root)
         .arg("--classpath")
         .arg(classpath)
         .arg("--sources-file")
@@ -551,7 +605,9 @@ pub fn review(root: &Path, options: &Options, base: &str) -> Result<Value, Strin
             full.strip_prefix(&format!("{prefix}/"))
         };
         if let Some(path) = relative {
-            if !path.ends_with(".java") || !Path::new(path).starts_with(&source_prefix) {
+            if !(path.ends_with(".workflow.vitrifi")
+                || path.ends_with(".java") && Path::new(path).starts_with(&source_prefix))
+            {
                 continue;
             }
             let destination = snapshot.path().join(path);
@@ -765,6 +821,9 @@ fn target_runtime_gaps(target: &TargetContext, report: Option<&Value>) -> Vec<St
         for policy in &entry.policies {
             let (kind, effect, needs_error) = match policy {
                 SourcePolicy::Forbid { effect } => ("forbid", effect, false),
+                SourcePolicy::NoEffectOnRejection { effect } => {
+                    ("no_effect_on_rejection", effect, true)
+                }
                 SourcePolicy::NoEffectOnError { effect } => ("no_effect_on_error", effect, true),
             };
             let policy_matches = |v: &Value| {
@@ -779,6 +838,8 @@ fn target_runtime_gaps(target: &TargetContext, report: Option<&Value>) -> Vec<St
                 items.iter().any(|v| {
                     matches(v)
                         && (!needs_error || v["outcome"] == "threw")
+                        && (kind != "no_effect_on_rejection"
+                            || v["error_type"] == "dev.vitrifi.workflow.Rejected")
                         && v["policies"]
                             .as_array()
                             .is_some_and(|ps| ps.iter().any(policy_matches))
@@ -867,6 +928,9 @@ fn runtime_gaps_scoped(
             for policy in &operation.source.policies {
                 let (kind, effect, needs_error) = match policy {
                     SourcePolicy::Forbid { effect } => ("forbid", effect, false),
+                    SourcePolicy::NoEffectOnRejection { effect } => {
+                        ("no_effect_on_rejection", effect, true)
+                    }
                     SourcePolicy::NoEffectOnError { effect } => {
                         ("no_effect_on_error", effect, true)
                     }
@@ -886,6 +950,8 @@ fn runtime_gaps_scoped(
                 let exercised = invocations.iter().any(|v| {
                     matches(v)
                         && (!needs_error || v["outcome"] == "threw")
+                        && (kind != "no_effect_on_rejection"
+                            || v["error_type"] == "dev.vitrifi.workflow.Rejected")
                         && v["policies"].as_array().is_some_and(|ps| {
                             ps.iter().any(|p| {
                                 p["kind"] == kind
@@ -918,8 +984,11 @@ fn discovery_current(root: &Path, expected: Option<&[PathBuf]>) -> bool {
     })
 }
 
-fn inputs_current(root: &Path, inputs: &BTreeMap<String, String>) -> bool {
+pub(crate) fn inputs_current(root: &Path, inputs: &BTreeMap<String, String>) -> bool {
     inputs.iter().all(|(key, hash)| {
+        if key == "workflow-selection" {
+            return crate::workflows::selection_digest(root).is_ok_and(|current| current == *hash);
+        }
         if let Some(path) = key.strip_prefix("java-selection-path:") {
             return selection_destination(Path::new(path)).is_ok_and(|current| current == *hash);
         }
@@ -1375,6 +1444,37 @@ mod tests {
         missing_policy["policy_coverage"] = json!([]);
         missing_policy["invocations"][0]["policies"] = json!([]);
         assert!(!target_runtime_gaps(&context, Some(&missing_policy)).is_empty());
+    }
+
+    #[test]
+    fn rejection_evidence_requires_exact_business_outcome_for_source_and_target() {
+        let mut analysis = analysis();
+        let op = analysis.program.operations.values_mut().next().unwrap();
+        let policy = SourcePolicy::NoEffectOnRejection {
+            effect: ResourceEffect {
+                action: "write".into(),
+                resource: "Carts".into(),
+            },
+        };
+        op.source.policies = vec![policy.clone()];
+        let mut context = selected_target();
+        context.entries[0].method = op.source.symbol.clone();
+        context.entries[0].policies = vec![policy];
+        let mut trace = report();
+        trace["policy_coverage"][0]["kind"] = json!("no_effect_on_rejection");
+        trace["invocations"][0]["policies"][0]["kind"] = json!("no_effect_on_rejection");
+        for error_type in [
+            "",
+            "dev.vitrifi.workflow.Failed",
+            "java.lang.IllegalArgumentException",
+        ] {
+            trace["invocations"][0]["error_type"] = json!(error_type);
+            assert!(!runtime_gaps(&analysis, Some(&trace), "session").is_empty());
+            assert!(!target_runtime_gaps(&context, Some(&trace)).is_empty());
+        }
+        trace["invocations"][0]["error_type"] = json!("dev.vitrifi.workflow.Rejected");
+        assert!(runtime_gaps(&analysis, Some(&trace), "session").is_empty());
+        assert!(target_runtime_gaps(&context, Some(&trace)).is_empty());
     }
 
     #[test]

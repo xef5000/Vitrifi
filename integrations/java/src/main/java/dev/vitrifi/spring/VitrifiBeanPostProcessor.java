@@ -3,6 +3,7 @@ package dev.vitrifi.spring;
 import dev.vitrifi.api.Feature;
 import dev.vitrifi.api.Forbid;
 import dev.vitrifi.api.NoEffectOnError;
+import dev.vitrifi.api.NoEffectOnRejection;
 import dev.vitrifi.api.ResourceTable;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -48,7 +49,8 @@ public final class VitrifiBeanPostProcessor implements BeanPostProcessor, Ordere
         for (Class<?> owner = targetClass; owner != null && owner != Object.class; owner = owner.getSuperclass()) {
             for (Method method : owner.getDeclaredMethods()) {
                 if (!Modifier.isPublic(method.getModifiers()) && (method.getAnnotationsByType(Forbid.class).length > 0
-                        || method.getAnnotationsByType(NoEffectOnError.class).length > 0)) {
+                        || method.getAnnotationsByType(NoEffectOnError.class).length > 0
+                        || method.getAnnotationsByType(NoEffectOnRejection.class).length > 0)) {
                     runtime.registerMethod(featureName, method);
                     runtime.instrumentationGap("Nonpublic policy method cannot be intercepted by Spring proxy: " + VitrifiRuntime.methodId(method));
                 }

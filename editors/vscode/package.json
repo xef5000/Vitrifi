@@ -2,7 +2,7 @@
   "name": "vitrifi",
   "displayName": "Vitrifi",
   "description": "Syntax highlighting and editing support for the Vitrifi architecture language.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "vitrifi-local",
   "private": true,
   "license": "UNLICENSED",

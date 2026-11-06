@@ -2,6 +2,7 @@ package dev.vitrifi.spring;
 
 import dev.vitrifi.api.Forbid;
 import dev.vitrifi.api.NoEffectOnError;
+import dev.vitrifi.api.NoEffectOnRejection;
 import dev.vitrifi.api.SqlClassifier;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
@@ -82,11 +83,20 @@ public final class VitrifiRuntime {
             this.scenario = session == null ? null : session.currentScenario();
         }
 
+        boolean exercises(Policy policy) {
+            return switch (policy.kind()) {
+                case "no_effect_on_error" -> "threw".equals(outcome);
+                case "no_effect_on_rejection" -> "threw".equals(outcome)
+                        && "dev.vitrifi.workflow.Rejected".equals(errorType);
+                default -> true;
+            };
+        }
+
         Map<String, Object> describe() {
             List<Map<String, Object>> results = new ArrayList<>();
             for (Policy policy : policies) {
                 String status = violated.contains(policy.key()) ? "violated"
-                        : policy.kind().equals("no_effect_on_error") && !outcome.equals("threw") ? "untested" : "passed";
+                        : !exercises(policy) ? "untested" : "passed";
                 results.add(policy.describe(status));
             }
             return map("id", id, "feature", feature, "method", method,
@@ -191,7 +201,7 @@ public final class VitrifiRuntime {
             invocation.outcome = "threw";
             invocation.errorType = failure.getClass().getName();
             for (Policy policy : invocation.policies) {
-                if (policy.kind().equals("no_effect_on_error") && invocation.events.stream().anyMatch(
+                if (!policy.kind().equals("forbid") && invocation.exercises(policy) && invocation.events.stream().anyMatch(
                         event -> event.attempted && matches(policy, event))) {
                     violation(invocation, policy, "The feature exited exceptionally after a matching JDBC execution attempt");
                 }
@@ -289,6 +299,9 @@ public final class VitrifiRuntime {
         }
         for (NoEffectOnError annotation : method.getAnnotationsByType(NoEffectOnError.class)) {
             policies.add(new Policy(feature, methodId(method), "no_effect_on_error", annotation.action(), annotation.resource()));
+        }
+        for (NoEffectOnRejection annotation : method.getAnnotationsByType(NoEffectOnRejection.class)) {
+            policies.add(new Policy(feature, methodId(method), "no_effect_on_rejection", annotation.action(), annotation.resource()));
         }
         return policies;
     }

@@ -190,4 +190,4 @@ Architecture constraints as code already exist. ArchUnit checks Java architectur
 
 Vitrifi's hypothesis to test is the combination: a feature-sized review/context surface, implementation-derived effects with explicit uncertainty, independently authored constraints, and an agent feedback loop. Smaller-model savings and reduced human review remain measurements to earn.
 
-The next useful engineering milestone is the target conformance slice above. In parallel, the generated-context experiment can run on today's code. The workflow/algebra prototype should stay small and experimental until it demonstrates an advantage that the simpler loop cannot provide.
+Target conformance is implemented. The next experimental slice, [compiled workflows](workflows.md), now generates checkout orchestration and checks Java leaves, explicit rejection paths and runtime scenarios. The generated-context experiment can run independently. Algebraic certificates remain a later milestone: first evaluate whether the restricted workflow earns its cost, then define and independently check specific rewrites under its explicit execution semantics.

@@ -65,6 +65,50 @@ class SourceAnalyzerTest {
         return SourceAnalyzer.analyze(root, sources, System.getProperty("java.class.path"));
     }
 
+    @Test
+    void workflowRuntimePoliciesAndConstructorsAreModeled() throws Exception {
+        var model = analyze("""
+            package demo;
+            @org.springframework.stereotype.Service
+            @dev.vitrifi.api.Feature("Checkout")
+            class Checkout {
+                @dev.vitrifi.api.NoEffectOnRejection(action="write", resource="Carts")
+                @dev.vitrifi.api.NoEffectOnRejection(action="read", resource="Carts")
+                public void apply(boolean reject) {
+                    if (reject) throw new dev.vitrifi.workflow.Rejected("rejected");
+                    throw new dev.vitrifi.workflow.Failed("leaf", new IllegalStateException("failed"));
+                }
+            }
+            """);
+        clean(model);
+        var entry = operation(model, "demo.Checkout.apply(boolean)");
+        assertEquals(2, list(entry, "policies").size());
+        assertTrue(list(entry, "policies").stream().allMatch(p -> p.get("kind").equals("no_effect_on_rejection")));
+        assertTrue(list(entry, "calls").stream().allMatch(c -> c.get("resolution").equals("intrinsic")), Json.write(model));
+    }
+
+    @Test
+    void sourceCannotSpoofTrustedWorkflowExceptionConstructor() throws Exception {
+        var model = analyze(Map.of(
+            "demo/Checkout.java", """
+                package demo;
+                @dev.vitrifi.api.Feature("Checkout") class Checkout {
+                    public void apply() { throw new dev.vitrifi.workflow.Rejected("rejected"); }
+                }
+                """,
+            "dev/vitrifi/workflow/Rejected.java", """
+                package dev.vitrifi.workflow;
+                public class Rejected extends RuntimeException {
+                    public Rejected(String message) { super(message); System.nanoTime(); }
+                }
+                """));
+        clean(model);
+        var entry = operation(model, "demo.Checkout.apply()");
+        assertTrue(list(entry, "calls").stream().noneMatch(c -> c.get("resolution").equals("intrinsic")), Json.write(model));
+        var ctor = operation(model, "dev.vitrifi.workflow.Rejected.<init>(java.lang.String)");
+        assertTrue(list(ctor, "calls").stream().anyMatch(c -> c.get("resolution").equals("unknown")), Json.write(model));
+    }
+
     private Map<String, Object> analyze(String source) throws Exception {
         return analyze(Map.of("demo/Checkout.java", source));
     }

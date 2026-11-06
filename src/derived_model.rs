@@ -49,6 +49,7 @@ pub struct FeatureMarker {
 pub enum SourcePolicy {
     Forbid { effect: ResourceEffect },
     NoEffectOnError { effect: ResourceEffect },
+    NoEffectOnRejection { effect: ResourceEffect },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
