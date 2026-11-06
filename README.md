@@ -6,6 +6,8 @@ Vitrifi 0.3 generates feature-local `.vitrifi` files from Java source and suppor
 
 The Rust core combines a `javac` analysis adapter with explicit Spring/JDBC runtime verification. Unknown dependencies remain visible and prevent a complete check. Generated facts cannot grant themselves permission to violate an authored policy.
 
+Open the [interactive explainer](site/index.html) in a browser for before/after examples, a guide to generated syntax, and the boundaries of each check. It is a small static site that works directly from disk; see [site/README.md](site/README.md).
+
 ## Java/Spring: generate and verify
 
 With JDK 21+, Maven, and Rust installed, run from this repository:

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="See how Vitrifi turns Java source into a reviewable architecture view, checks declared policies, and catches implementation drift.">
+  <meta name="theme-color" content="#f5f5ef">
+  <title>Vitrifi — Architecture, grounded in code.</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+  <script src="./examples.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header shell">
+    <a class="brand" href="#" aria-label="Vitrifi home">
+      <svg viewBox="0 0 32 34" aria-hidden="true"><path d="M2 3h9l8 23-5 7L2 3Z" fill="currentColor"/><path d="M20 3h10L19 26l-4-12 5-11Z" fill="#659276"/></svg>
+      vitrifi<span class="brand-dot">.</span>
+    </a>
+    <nav aria-label="Main navigation">
+      <a href="#how-it-works">How it works</a>
+      <a href="#playground">Try a change</a>
+      <a href="#generated">Read the output</a>
+    </nav>
+    <a class="repo-link" href="https://github.com/xef5000/Vitrifi">GitHub <span aria-hidden="true">↗</span></a>
+  </header>
+
+  <main id="main">
+    <section class="hero shell" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="status-dot"></span> Architecture, grounded in code</div>
+        <h1 id="hero-title">The code changes.<br>The architecture<br><em>comes with it.</em></h1>
+        <p class="hero-description">Turn implementation into a feature you can read. Declare the rules that matter. Check that the code still follows them.</p>
+        <div class="hero-actions">
+          <a class="button button-dark" href="#playground">See what it catches <span aria-hidden="true">↘</span></a>
+          <a class="text-link" href="#generated">Explore a .vitrifi file <span aria-hidden="true">→</span></a>
+        </div>
+        <p class="hero-meta"><span>v0.3 prototype</span><span>Java + Spring</span><span>Feature-local files</span></p>
+      </div>
+
+      <div class="hero-visual" aria-label="Java source becomes a generated feature view, checked with policies and runtime evidence">
+        <div class="visual-topline"><span class="micro">ONE FEATURE. A CONNECTED VIEW.</span><span class="visual-index">01 / 03</span></div>
+        <div class="source-chip"><span class="file-icon">J</span><span>DiscountService.java</span><span class="chip-tag">source</span></div>
+        <div class="flow-connector"><span></span><code>javac + Spring analysis</code></div>
+        <div class="hero-code-card">
+          <div class="window-bar"><span class="file-icon file-icon-green">V</span><span>Checkout.Discounts.vitrifi</span><span class="generated-label">GENERATED</span></div>
+          <pre aria-label="Abbreviated generated feature excerpt"><code><span class="token-keyword">feature</span> <span class="token-type">Checkout.Discounts</span> {
+  <span class="token-keyword">export resource</span> Carts;
+
+  <span class="token-keyword">export operation</span> <span class="token-function">preview</span>(…)
+    <span class="token-keyword">effects</span> [<span class="token-effect">read</span> Carts];
+    <span class="token-keyword">calls</span> [load];
+  <span class="token-comment">// … excerpt abbreviated</span>
+}</code></pre>
+          <div class="code-card-foot"><span class="little-square"></span> Implementation facts, ready for the PR.</div>
+        </div>
+        <div class="flow-connector flow-connector-short"><span></span></div>
+        <div class="proof-strip"><span class="check-icon" aria-hidden="true">✓</span><div><strong>No writes from preview</strong><span>Declared policy · checked against source</span></div><span class="proof-tag">CHECKED</span></div>
+        <div class="visual-caption"><span>Code provides the facts.</span><span>You provide the intent.</span></div>
+      </div>
+    </section>
+
+    <section class="workflow shell" id="how-it-works" aria-labelledby="workflow-title">
+      <div class="section-heading compact-heading"><p class="eyebrow">01 / The workflow</p><h2 id="workflow-title">A little intent. A lot less guesswork.</h2></div>
+      <div class="workflow-grid">
+        <article><div class="step-label"><span>01</span><span class="micro">YOU AUTHOR</span></div><h3>Declare what matters.</h3><p>Name a feature, map a resource, and add policies to ordinary Java. Keep business logic in its own language.</p><code class="inline-example">@Forbid(action = "write", resource = "Carts")</code></article>
+        <article><div class="step-label"><span>02</span><span class="micro">THE COMPILER DERIVES</span></div><h3>Generate the relationships.</h3><p>Compiler analysis follows supported calls and Spring wiring. Signatures, dependencies, and SQL effects become a local <code>.vitrifi</code> file.</p><code class="inline-example">vitrifi generate --root your-app</code></article>
+        <article><div class="step-label"><span>03</span><span class="micro">EXECUTION ADDS EVIDENCE</span></div><h3>Check what really happens.</h3><p>Static checks enforce supported effect policies. Instrumented tests check actual JDBC attempts on the paths they exercise.</p><code class="inline-example">vitrifi verify --java --root your-app -- mvn test</code></article>
+      </div>
+    </section>
+
+    <section class="playground-section" id="playground" aria-labelledby="playground-title">
+      <div class="shell">
+        <div class="section-heading playground-heading"><div><p class="eyebrow">02 / Put a change to the test</p><h2 id="playground-title">Small diff.<br>Architectural consequence.</h2></div><p>Some mistakes hide behind a perfectly ordinary method call. Follow a change from Java to the rule it breaks.</p></div>
+        <div class="playground">
+          <div class="scenario-tabs" role="tablist" aria-label="Example changes" id="scenario-tabs"></div>
+          <div id="scenario-panel" role="tabpanel" tabindex="0" aria-labelledby="scenario-title">
+            <div class="scenario-header"><div><p class="micro" id="scenario-label"></p><h3 id="scenario-title"></h3><p id="scenario-description"></p></div><div class="change-toggle" role="group" aria-label="Implementation version"><button type="button" id="before-button" aria-pressed="true">Before</button><button type="button" id="after-button" aria-pressed="false">Introduce the change <span aria-hidden="true">↗</span></button></div></div>
+            <div class="demo-grid">
+              <div class="demo-source"><div class="panel-heading"><span><span class="file-icon">J</span> DiscountService.java</span><span id="code-version">ORIGINAL</span></div><pre class="numbered-code" tabindex="0" aria-label="Java example"><code id="scenario-code"></code></pre><div class="policy-bar"><span class="micro">DECLARED POLICY</span><code id="scenario-policy"></code></div></div>
+              <div class="demo-result" aria-live="polite" aria-atomic="true"><div class="panel-heading"><span>Vitrifi’s view</span><span class="status-badge" id="result-status"></span></div><div class="result-content"><h4 id="result-label"></h4><p id="result-summary"></p><div class="effect-path" id="effect-path" aria-label="Relationship or execution path"></div><div class="terminal"><div><span aria-hidden="true">$</span> <code id="result-command"></code></div><pre id="result-output"></pre></div></div></div>
+            </div>
+            <div class="scenario-explanation"><span class="explanation-symbol" aria-hidden="true">↳</span><p id="scenario-explanation"></p></div>
+            <div class="demo-footnote"><span><span class="little-square"></span> Interactive explanation · prewritten outcomes and condensed output. No compiler runs in your browser.</span><span id="scenario-limit"></span></div>
+          </div>
+          <noscript><div class="no-script"><h3>A preview method accidentally writes to the cart.</h3><p>With <code>@Forbid(action = "write", resource = "Carts")</code>, adding <code>carts.save(...)</code> to <code>preview()</code> produces a forbidden-effect diagnostic. Regenerating the feature file cannot approve the write.</p><p>Enable JavaScript to explore all four before/after examples. The rest of this page works without it.</p></div></noscript>
+        </div>
+      </div>
+    </section>
+
+    <section class="generated-section shell" id="generated" aria-labelledby="generated-title">
+      <div class="section-heading"><div><p class="eyebrow">03 / Read the feature</p><h2 id="generated-title">A map that lives<br>beside the code.</h2></div><p>Open the feature file in a pull request. See what it exposes, what it calls, and what it can affect. Follow the source link when you need the implementation.</p></div>
+      <div class="generated-grid">
+        <div class="generated-code"><div class="panel-heading"><span><span class="file-icon file-icon-green">V</span> Checkout.Discounts.vitrifi</span><span class="micro">GENERATED EXCERPT</span></div><pre class="numbered-code" tabindex="0" aria-label="Generated Vitrifi code"><code id="generated-code"><span class="code-line" data-concept="feature"><span class="line-number" aria-hidden="true">1</span><span><span class="token-keyword">feature</span> <span class="token-type">Checkout.Discounts</span> {</span></span>
+<span class="code-line" data-concept="purpose"><span class="line-number" aria-hidden="true">2</span><span>  <span class="token-keyword">purpose</span> <span class="token-string">"Apply one valid coupon to the owner's cart without writes on rejection"</span>;</span></span>
+<span class="code-line"><span class="line-number" aria-hidden="true">3</span><span></span></span>
+<span class="code-line" data-concept="type"><span class="line-number" aria-hidden="true">4</span><span>  <span class="token-keyword">export type</span> <span class="token-type">Cart</span>;</span></span>
+<span class="code-line" data-concept="resource"><span class="line-number" aria-hidden="true">5</span><span>  <span class="token-keyword">export resource</span> <span class="token-type">Carts</span>;</span></span>
+<span class="code-line"><span class="line-number" aria-hidden="true">6</span><span></span></span>
+<span class="code-line" data-concept="operation"><span class="line-number" aria-hidden="true">7</span><span>  <span class="token-keyword">export operation</span> <span class="token-function">preview</span>(cartId: <span class="token-type">String</span>) -&gt; <span class="token-type">Cart</span> {</span></span>
+<span class="code-line" data-concept="bind"><span class="line-number" aria-hidden="true">8</span><span>    <span class="token-keyword">bind java</span> <span class="token-string">"./DiscountService.java"</span></span></span>
+<span class="code-line" data-concept="bind"><span class="line-number" aria-hidden="true">9</span><span>      <span class="token-keyword">symbol</span> <span class="token-string">"dev.vitrifi.example.checkout.DiscountService.preview(java.lang.String)"</span>;</span></span>
+<span class="code-line" data-concept="effects"><span class="line-number" aria-hidden="true">10</span><span>    <span class="token-keyword">effects</span> [<span class="token-effect">read</span> Carts];</span></span>
+<span class="code-line" data-concept="calls"><span class="line-number" aria-hidden="true">11</span><span>    <span class="token-keyword">calls</span> [load];</span></span>
+<span class="code-line"><span class="line-number" aria-hidden="true">12</span><span>    <span class="token-comment">// Policy result: "passed"</span></span></span>
+<span class="code-line"><span class="line-number" aria-hidden="true">13</span><span>  }</span></span>
+<span class="code-line"><span class="line-number" aria-hidden="true">14</span><span>  <span class="token-comment">// Other operations and source metadata omitted.</span></span></span>
+<span class="code-line"><span class="line-number" aria-hidden="true">15</span><span>}</span></span></code></pre><div class="generated-footer"><span>Excerpt · long lines wrapped · comments shortened</span><a href="./examples/Checkout.Discounts.vitrifi" download>Download the actual file <span aria-hidden="true">↓</span></a></div></div>
+        <aside class="reading-guide" aria-label="Vitrifi language guide"><p class="micro">FOLLOW THE FILE</p><div class="concept-buttons" role="group" aria-label="Explain a language element"><button type="button" data-concept="feature" aria-pressed="true">feature</button><button type="button" data-concept="purpose" aria-pressed="false">purpose</button><button type="button" data-concept="type" aria-pressed="false">type</button><button type="button" data-concept="resource" aria-pressed="false">resource</button><button type="button" data-concept="operation" aria-pressed="false">operation</button><button type="button" data-concept="bind" aria-pressed="false">bind</button><button type="button" data-concept="effects" aria-pressed="false">effects</button><button type="button" data-concept="calls" aria-pressed="false">calls</button></div><div class="concept-definition" aria-live="polite"><span id="concept-number" class="concept-number">01</span><h3 id="concept-title">The capability, named.</h3><p id="concept-description">A feature groups source entry operations and the code they reach. Its name comes from @Feature in Java. The generated view gives that capability a place in the pull request.</p><span class="provenance-label" id="concept-origin">AUTHORED IDENTITY · DERIVED RELATIONSHIPS</span></div><p class="guide-note">Select a term to follow it in the file.</p></aside>
+      </div>
+      <div class="repo-layout"><div><p class="micro">SCALES WITH YOUR REPO</p><h3>One feature. One review surface.</h3><p>Generate a file beside the implementation. Other features get their own views. Policies stay in source annotations; regeneration updates the facts.</p></div><pre><code><span class="token-comment">checkout/</span>
+├── DiscountService.java
+├── JdbcCartRepository.java
+└── <span class="tree-highlight">Checkout.Discounts.vitrifi</span>  <span class="token-comment">← start your review here</span></code></pre></div>
+    </section>
+
+    <section class="scope-section shell" aria-labelledby="scope-title"><div class="section-heading"><div><p class="eyebrow">04 / Know what you know</p><h2 id="scope-title">Evidence with its<br>boundaries attached.</h2></div><p>A trustworthy view tells you where its knowledge ends. Vitrifi keeps authored intent, derived facts, and observed behavior distinct.</p></div><div class="scope-grid"><article><span class="scope-icon">↳</span><h3>Derived from source</h3><p>Java signatures, supported calls, bounded Spring wiring, and recognized SQL effects. Unknown reachable behavior produces <code>incomplete</code>.</p><span class="scope-tag">STATIC ANALYSIS</span></article><article><span class="scope-icon">✓</span><h3>Observed in execution</h3><p>Fresh scenario evidence from synchronous Spring proxies and instrumented JDBC. An error-path policy needs an actual exceptional invocation.</p><span class="scope-tag">RUNTIME EVIDENCE</span></article><article><span class="scope-icon">…</span><h3>Still outside the view</h3><p>All possible inputs, arbitrary libraries, async work, database triggers, and durable transaction outcomes. Passing scenarios cover the paths they exercised.</p><span class="scope-tag">EXPLICIT LIMITS</span></article></div><p class="support-note"><strong>Start with Java + Spring.</strong> This generated workflow supports Java 21+ and a conservative SQL subset. Python, Ruby, JavaScript, and TypeScript currently have the earlier authored workflow.</p></section>
+
+    <section class="start-section shell" id="start" aria-labelledby="start-title"><div><p class="eyebrow">TAKE IT TO YOUR TERMINAL</p><h2 id="start-title">Try the real checkout.</h2><p>Run the Spring/H2 example, then move a write before validation. See the policy fail against actual execution.</p><a class="text-link" href="https://github.com/xef5000/Vitrifi/blob/b8a2a76/docs/java-spring.md">Read the integration guide <span aria-hidden="true">↗</span></a></div><div class="quickstart"><div class="panel-heading"><span>From the repository root</span><button type="button" id="copy-commands">Copy commands <span aria-hidden="true">⧉</span></button></div><pre tabindex="0"><code id="quickstart-code">cargo build
+mvn install
+mvn -f examples/spring-checkout/pom.xml generate-resources
+
+./target/debug/vitrifi generate --root examples/spring-checkout
+./target/debug/vitrifi verify --java --root examples/spring-checkout -- mvn test</code></pre><div class="quickstart-foot"><span>Requires JDK 21+, Maven, and Rust.</span><span id="copy-status" role="status"></span></div></div></section>
+  </main>
+  <footer class="site-footer shell"><a class="brand footer-brand" href="#">vitrifi<span class="brand-dot">.</span></a><p>Intent in the source. Architecture in the review.</p><a href="https://github.com/xef5000/Vitrifi">Explore the repository <span aria-hidden="true">↗</span></a></footer>
+</body>
+</html>
