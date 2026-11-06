@@ -1,5 +1,7 @@
 # Reading and writing Vitrifi
 
+For executable orchestration that generates a Spring service, see the [compiled workflow language](workflows.md). Its syntax and guarantees are separate from authored targets and generated implementation views.
+
 This guide explains the original authored feature language. For the new workflow that generates feature files from Java source and checks real Spring/JDBC behavior, start with [Generated features from Java and Spring](java-spring.md). The declaration vocabulary below also helps when reading generated files, but contributors edit the Java source and annotations instead of generated output.
 
 For independent design constraints that the implementation must satisfy, read [Architecture targets](targets.md). It explains the `.target.vitrifi` syntax, how to follow its public contracts and permitted effects, and what conformance and execution evidence establish.

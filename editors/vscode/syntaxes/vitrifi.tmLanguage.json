@@ -10,6 +10,9 @@
       "include": "#use"
     },
     {
+      "include": "#workflow"
+    },
+    {
       "match": "\\btarget\\b",
       "name": "storage.modifier.target.vitrifi"
     },
@@ -995,7 +998,7 @@
       }
     },
     "policy-effects": {
-      "begin": "\\b(?:forbid|no_effect_on_error)\\b",
+      "begin": "\\b(?:forbid|no_effect_on_error|no_effect_on_rejection)\\b",
       "end": ";",
       "name": "meta.policy.effects.vitrifi",
       "patterns": [
@@ -1040,6 +1043,411 @@
           "name": "punctuation.terminator.statement.vitrifi"
         }
       }
+    },
+    "workflow": {
+      "begin": "\\bworkflow\\b",
+      "end": "(?<=\\})",
+      "name": "meta.workflow.vitrifi",
+      "beginCaptures": {
+        "0": {
+          "name": "storage.modifier.workflow.vitrifi"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#feature-header"
+        },
+        {
+          "include": "#workflow-body"
+        }
+      ]
+    },
+    "workflow-body": {
+      "begin": "\\{",
+      "end": "\\}",
+      "name": "meta.feature.body.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#workflow-operation"
+        },
+        {
+          "include": "#workflow-action"
+        },
+        {
+          "include": "#resource-declaration"
+        },
+        {
+          "include": "#description"
+        },
+        {
+          "include": "#workflow-emission"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.block.begin.vitrifi"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.block.end.vitrifi"
+        }
+      }
+    },
+    "workflow-emission": {
+      "begin": "\\b(?:emit|actions)\\b",
+      "end": ";",
+      "name": "meta.workflow.emission.vitrifi",
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.other.binding.vitrifi"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "match": "\\bjava\\b",
+          "name": "support.constant.language.vitrifi"
+        }
+      ]
+    },
+    "workflow-operation": {
+      "begin": "\\boperation\\b",
+      "end": "(?<=\\})|(?=;)",
+      "name": "meta.declaration.operation.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "begin": "\\(",
+          "end": "\\)",
+          "name": "meta.parameters.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "begin": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+              "end": "(?=,|\\))",
+              "name": "meta.parameter.vitrifi",
+              "patterns": [
+                {
+                  "include": "#comments"
+                },
+                {
+                  "match": ":",
+                  "name": "punctuation.separator.type.vitrifi"
+                },
+                {
+                  "include": "#types"
+                }
+              ],
+              "beginCaptures": {
+                "0": {
+                  "name": "variable.parameter.vitrifi"
+                }
+              }
+            },
+            {
+              "match": ",",
+              "name": "punctuation.separator.comma.vitrifi"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.begin.vitrifi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.end.vitrifi"
+            }
+          }
+        },
+        {
+          "begin": "->",
+          "end": "(?=\\{)",
+          "name": "meta.return-type.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#types"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.operator.arrow.vitrifi"
+            }
+          }
+        },
+        {
+          "begin": "\\{",
+          "end": "\\}",
+          "name": "meta.operation.body.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#description"
+            },
+            {
+              "include": "#binding"
+            },
+            {
+              "include": "#effects"
+            },
+            {
+              "include": "#calls"
+            },
+            {
+              "include": "#requirements"
+            },
+            {
+              "include": "#dependencies"
+            },
+            {
+              "include": "#policy-effects"
+            },
+            {
+              "include": "#workflow-statements"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.block.begin.vitrifi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.block.end.vitrifi"
+            }
+          }
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "entity.name.function.vitrifi"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "storage.type.operation.vitrifi"
+        }
+      }
+    },
+    "workflow-action": {
+      "begin": "\\baction\\b",
+      "end": "(?<=\\})|(?=;)",
+      "name": "meta.declaration.operation.vitrifi",
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "begin": "\\(",
+          "end": "\\)",
+          "name": "meta.parameters.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "begin": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+              "end": "(?=,|\\))",
+              "name": "meta.parameter.vitrifi",
+              "patterns": [
+                {
+                  "include": "#comments"
+                },
+                {
+                  "match": ":",
+                  "name": "punctuation.separator.type.vitrifi"
+                },
+                {
+                  "include": "#types"
+                }
+              ],
+              "beginCaptures": {
+                "0": {
+                  "name": "variable.parameter.vitrifi"
+                }
+              }
+            },
+            {
+              "match": ",",
+              "name": "punctuation.separator.comma.vitrifi"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.begin.vitrifi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.parameters.end.vitrifi"
+            }
+          }
+        },
+        {
+          "begin": "->",
+          "end": "(?=\\{)",
+          "name": "meta.return-type.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#types"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.operator.arrow.vitrifi"
+            }
+          }
+        },
+        {
+          "begin": "\\{",
+          "end": "\\}",
+          "name": "meta.operation.body.vitrifi",
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#description"
+            },
+            {
+              "include": "#binding"
+            },
+            {
+              "include": "#effects"
+            },
+            {
+              "include": "#calls"
+            },
+            {
+              "include": "#requirements"
+            },
+            {
+              "include": "#dependencies"
+            },
+            {
+              "include": "#policy-effects"
+            }
+          ],
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.block.begin.vitrifi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.block.end.vitrifi"
+            }
+          }
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "entity.name.function.vitrifi"
+        }
+      ],
+      "beginCaptures": {
+        "0": {
+          "name": "storage.type.operation.vitrifi"
+        }
+      }
+    },
+    "workflow-statements": {
+      "patterns": [
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#strings"
+        },
+        {
+          "begin": "\\{",
+          "end": "\\}",
+          "patterns": [
+            {
+              "include": "#workflow-statements"
+            }
+          ]
+        },
+        {
+          "begin": "\\blet\\b",
+          "end": "=",
+          "beginCaptures": {
+            "0": {
+              "name": "storage.type.binding.vitrifi"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "keyword.operator.assignment.vitrifi"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+              "name": "variable.other.constant.vitrifi"
+            }
+          ]
+        },
+        {
+          "begin": "\\bcall\\b",
+          "end": "(?=\\()",
+          "beginCaptures": {
+            "0": {
+              "name": "keyword.control.call.vitrifi"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#comments"
+            },
+            {
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+              "name": "entity.name.function.vitrifi"
+            }
+          ]
+        },
+        {
+          "match": "\\b(?:if|else|do|return|reject)\\b",
+          "name": "keyword.control.flow.vitrifi"
+        },
+        {
+          "match": "\\b(?:true|false)\\b",
+          "name": "constant.language.boolean.vitrifi"
+        },
+        {
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+          "name": "variable.other.readwrite.vitrifi"
+        },
+        {
+          "match": ";",
+          "name": "punctuation.terminator.statement.vitrifi"
+        }
+      ]
     }
   }
 }

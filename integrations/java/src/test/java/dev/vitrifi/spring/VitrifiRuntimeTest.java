@@ -299,6 +299,54 @@ class VitrifiRuntimeTest {
         }
     }
 
+    @Feature("Test.Workflow")
+    public static class WorkflowPolicyService {
+        private final JdbcTemplate jdbc;
+        public WorkflowPolicyService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+        @dev.vitrifi.api.NoEffectOnRejection(action = "write", resource = "Carts")
+        public void apply(boolean write, boolean reject) {
+            if (write) jdbc.update("UPDATE carts SET total = ? WHERE id = ?", 12, "cart-1");
+            if (reject) throw new dev.vitrifi.workflow.Rejected("business rejection");
+            throw new dev.vitrifi.workflow.Failed("save", new IllegalStateException("database failed"));
+        }
+    }
+
+    @Test
+    void infrastructureFailureDoesNotExerciseBusinessRejectionPolicy() throws Exception {
+        try (var context = context(WorkflowPolicyService.class)) {
+            var session = context.getBean(VitrifiRuntime.class).startSession(temporary.resolve("workflow-failure.json"));
+            var service = context.getBean(WorkflowPolicyService.class);
+            session.scenario("failure after write", () -> assertThrows(dev.vitrifi.workflow.Failed.class, () -> service.apply(true, false)));
+            var report = session.finish();
+            assertEquals("incomplete", report.get("status"));
+            assertEquals("untested", list(report, "policy_coverage").getFirst().get("status"));
+            assertTrue(list(report, "violations").isEmpty());
+        }
+    }
+
+    @Test
+    void businessRejectionAfterWriteIsStillAViolation() throws Exception {
+        try (var context = context(WorkflowPolicyService.class)) {
+            var session = context.getBean(VitrifiRuntime.class).startSession(temporary.resolve("workflow-rejected.json"));
+            var service = context.getBean(WorkflowPolicyService.class);
+            session.scenario("bad rejection", () -> assertThrows(dev.vitrifi.workflow.Rejected.class, () -> service.apply(true, true)));
+            var report = session.finish();
+            assertEquals("failed", report.get("status"));
+            assertEquals("no_effect_on_rejection", list(report, "violations").getFirst().get("kind"));
+        }
+    }
+
+    @Test
+    void rejectionBeforeWriteCoversPolicyAlongsideInfrastructureFailure() throws Exception {
+        try (var context = context(WorkflowPolicyService.class)) {
+            var session = context.getBean(VitrifiRuntime.class).startSession(temporary.resolve("workflow-safe.json"));
+            var service = context.getBean(WorkflowPolicyService.class);
+            session.scenario("safe rejection", () -> assertThrows(dev.vitrifi.workflow.Rejected.class, () -> service.apply(false, true)));
+            session.scenario("infrastructure failure", () -> assertThrows(dev.vitrifi.workflow.Failed.class, () -> service.apply(true, false)));
+            session.verify();
+        }
+    }
+
     private static AnnotationConfigApplicationContext context(Class<?> feature) {
         AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
         context.register(VitrifiSpringConfiguration.class, Infrastructure.class, feature);

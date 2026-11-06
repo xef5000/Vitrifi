@@ -1,5 +1,7 @@
 # Vitrifi language reference
 
+For executable orchestration that generates a Spring service, see the [compiled workflow language](workflows.md). Its syntax and guarantees are separate from authored targets and generated implementation views.
+
 This reference covers the authored declaration language retained from v0.2. Vitrifi 0.3 also provides a [Java/Spring generation and verification workflow](java-spring.md): generated `.vitrifi` views use this vocabulary, while source analysis and runtime evidence establish the supported implementation relationships.
 
 The newer [`target feature` language](targets.md) has its own reference. It uses `.target.vitrifi` files, native Java type literals, table mappings, and class-based boundaries to constrain the implementation independently. Its syntax and checks differ from the declarations below.

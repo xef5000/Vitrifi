@@ -369,7 +369,16 @@ pub fn compile(root: &Path, entry: Option<&Path>) -> Result<Program, String> {
         }
         queue.push_back(slash(full.strip_prefix(&root).unwrap()));
     } else {
-        queue.extend(paths.iter().filter(|p| p.ends_with(".vitrifi")).cloned());
+        queue.extend(
+            paths
+                .iter()
+                .filter(|p| {
+                    p.ends_with(".vitrifi")
+                        && !p.ends_with(".target.vitrifi")
+                        && !p.ends_with(".workflow.vitrifi")
+                })
+                .cloned(),
+        );
     }
     if queue.is_empty() {
         return Err(
