@@ -79,6 +79,8 @@ Each `.target.vitrifi` file contains exactly one `target feature Name { ... }`. 
 
 The supported effect actions in targets are `read` and `write`. Every resource and dependency reference must resolve within the target. Resource, boundary, and operation names share one declaration namespace. Each operation field appears at most once; put several effects in its list when needed.
 
+Use consistent table identities in targets and source annotations. Without an explicit default-schema model, `carts` and `public.carts` may name the same table and cannot identify different resources. Conformance also rejects such conflicting aliases introduced only by source annotations. Distinct qualified tables such as `public.carts` and `archive.carts` can identify separate resources.
+
 ### Native types and bindings
 
 Target parameters and returns use quoted Java type literals. There are no target-local `type` declarations in this implementation. Use fully qualified reference types, Java primitives, arrays, and supported concrete generic types:
@@ -97,7 +99,7 @@ Parameter order and native types must match. Parameter names are descriptive and
 
 ### Coverage and dependency boundaries
 
-Coverage closes the selected public API: adding a public method without a corresponding target operation fails conformance. Removing a selected class or method also fails. The analyzer inventories these classes even if `@Feature` disappears. Public static methods are included in API coverage, although the Spring runtime integration cannot provide arbitrary static-entry interception. Constructors are not public entry operations. Nested classes need separate `cover` declarations.
+Coverage closes the selected public API: adding a public method without a corresponding target operation fails conformance. Removing a selected class or method also fails. The analyzer inventories these classes even if `@Feature` disappears. Public static methods are included in API coverage, although the Spring runtime integration cannot provide arbitrary static-entry interception. Unmodeled class initialization for a static entry prevents complete conformance, even when its body is empty. Overrides that require javac-generated bridge methods also produce an API gap. Constructors are not public entry operations. Nested classes need separate `cover` declarations.
 
 Boundary patterns match fully qualified source class names, for example:
 
@@ -108,6 +110,8 @@ boundary Storage java ["example.storage.*"];
 These are class-name globs, not directory paths. `*` can match dots, so this pattern also matches deeper package names. Use exact class names for tighter control. Overlapping boundaries are rejected when a source class matches more than one. Every source class reached through the analyzed call graph must map to exactly one boundary.
 
 Dependency permissions apply transitively. If `preview` reaches a storage method that calls an operation in a third boundary, that third boundary also needs permission from `preview`. Extracting a private helper into an already allowed boundary does not require another public operation or a new permission.
+
+Source-defined record constructors and generated accessors retain their owning class for this check, even when the effect analyzer summarizes their behavior as harmless. Calling a record in another boundary still needs permission.
 
 These checks constrain source call targets. They do not establish isolation of field access, type references, implemented interfaces, or object representations. A boundary name is not a Java visibility modifier.
 
@@ -125,6 +129,8 @@ Deleting a policy annotation therefore fails conformance instead of deleting the
 ## Author, check, and verify
 
 First follow the [Java/Spring setup](java-spring.md#build-and-generate) to build the CLI and analyzer and prepare the application's classpath. From this repository's root, select the checkout target explicitly:
+
+When updating Vitrifi, rebuild the Java analyzer along with the Rust CLI. Older analyzer results remain readable for generation but cannot establish the current target guarantees.
 
 ```sh
 discount_target=src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.target.vitrifi
@@ -158,7 +164,7 @@ discount_target=src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.ta
 | `inspect --target` | Shows targets, fresh analysis, and conformance together for diagnosis. |
 | `compile --target` | Emits the machine-readable analysis artifact after successful conformance. |
 
-Paths passed to `--target` are relative to `--root` unless absolute, and must remain inside that root. Target commands select Java analysis without requiring `--java`; analyzer, classpath, and source-root options from the Java guide still apply.
+Paths passed to `--target` are relative to `--root` unless absolute, and must remain inside that root. Target commands select Java analysis without requiring `--java`; analyzer, classpath, and source-root options from the Java guide still apply. Source-root paths containing symlinks are rejected.
 
 `effects` and `dependencies` are permissions, not execution requirements. A permitted write need not occur. The static model does not prove write count, call order, branch conditions, authorization logic, or arithmetic results. For example, changing a discount from 1,000 cents to 100 cents may preserve every architectural fact while breaking a business assertion in the tests.
 
@@ -182,6 +188,8 @@ Verification assumes the supplied command builds and runs the selected applicati
 
 Without explicit target paths, `lint` and `conform` discover `.target.vitrifi` files beneath `--root`. `check`, `inspect`, `compile`, `verify`, and `evidence` also select the target workflow when such files are discovered.
 
+An explicitly selected legacy authored `.vitrifi` file keeps the legacy workflow, unless `--java` or `--target` selects Java/targets. A generated Java `.vitrifi` entry continues to discover targets. Automatic target selection is checked again before verification and completion, including when the initial selection was empty.
+
 Use explicit paths in CI so deleting a target cannot silently remove it from discovery. Repeat `--target` for several feature-local contracts:
 
 ```sh
@@ -192,7 +200,11 @@ vitrifi check --root /path/to/application \
 
 Explicit selection checks those targets. Targets currently have no imports; each declares its own referenced resources and boundaries. Selected targets must have distinct feature names, nonoverlapping class coverage and method bindings, and consistent resource-to-table identities. Use each independently built application's module as `--root`, with its own classpath.
 
+`conform` and target-aware `verify` check the selected entries' reachable graphs and source policies. An unrelated feature's unresolved call or unexecuted policy does not add an obligation to that selection. Global compiler errors and actual runtime-session failures still prevent success. `check` additionally checks generated output for the application, so unrelated generated-view problems can still fail that command.
+
 Evidence records the selected target files and a content digest alongside implementation inputs. Editing a target, including its prose or comments, changes that digest and makes earlier target evidence stale. Rerun verification after an accepted target change.
+
+Evidence also records the selected source root, analyzer, and classpath file. Explicitly requesting different Java inputs during `evidence` lookup returns stale evidence, even when the earlier inputs have not changed. Without those flags, lookup checks the recorded inputs.
 
 Review reports authored target changes separately from implementation facts:
 

@@ -255,6 +255,22 @@ fn generated_entry(root: &Path, entry: Option<&Path>) -> Result<bool, String> {
     }))
 }
 
+fn evidence_selection(args: &Args) -> java::EvidenceSelection {
+    java::EvidenceSelection {
+        source_root: args.source_root.clone(),
+        analyzer: args
+            .analyzer
+            .clone()
+            .or_else(|| env::var_os("VITRIFI_JAVA_ANALYZER").map(PathBuf::from)),
+        classpath_file: args.classpath_file.clone(),
+    }
+}
+
+fn stale_target_selection() -> Value {
+    json!({"status":"stale","fresh":false,"executed":false,
+        "message":"Discovered target selection changed during this command; retry to check the new targets"})
+}
+
 fn execute_targets(args: &Args, root: &Path, paths: &[PathBuf]) -> Result<u8, String> {
     if !matches!(
         args.command.as_str(),
@@ -265,12 +281,12 @@ fn execute_targets(args: &Args, root: &Path, paths: &[PathBuf]) -> Result<u8, St
                 .into(),
         );
     }
-    if args.member.is_some()
-        || args
-            .entry
-            .as_ref()
-            .is_some_and(|path| !path.to_string_lossy().ends_with(".target.vitrifi"))
-    {
+    let unrelated_entry = args
+        .entry
+        .as_ref()
+        .is_some_and(|path| !path.to_string_lossy().ends_with(".target.vitrifi"))
+        && !generated_entry(root, args.entry.as_deref())?;
+    if args.member.is_some() || unrelated_entry {
         return Err("Target commands accept .target.vitrifi entries; remove the unrelated positional file or member".into());
     }
     let set = targets::load(root, paths)?;
@@ -285,7 +301,7 @@ fn execute_targets(args: &Args, root: &Path, paths: &[PathBuf]) -> Result<u8, St
         return Ok(if passed { 0 } else { 1 });
     }
     if args.command == "evidence" {
-        let mut result = java::evidence_status(root)?;
+        let mut result = java::evidence_status_with_selection(root, &evidence_selection(args))?;
         if result["target"]["revision"] != set.revision
             || result["target"]["files"] != json!(set.files)
         {
@@ -347,12 +363,19 @@ fn execute_targets(args: &Args, root: &Path, paths: &[PathBuf]) -> Result<u8, St
                     })
                     .collect(),
             };
-            let mut verified = java::verify_with_target(
+            let discovered: Vec<PathBuf> = set.files.iter().map(PathBuf::from).collect();
+            let automatic = args.targets.is_empty()
+                && !args
+                    .entry
+                    .as_ref()
+                    .is_some_and(|path| path.to_string_lossy().ends_with(".target.vitrifi"));
+            let mut verified = java::verify_with_target_selection(
                 root,
                 &analysis,
                 &args.runner,
                 args.timeout.unwrap_or(120),
                 Some(&context),
+                automatic.then_some(discovered.as_slice()),
             )?;
             verified["conformance"] = json!(conformance);
             result = verified;
@@ -390,9 +413,12 @@ fn execute_targets(args: &Args, root: &Path, paths: &[PathBuf]) -> Result<u8, St
     Ok(if passed { 0 } else { 1 })
 }
 
-fn execute_java(args: &Args, root: &Path) -> Result<u8, String> {
+fn execute_java(args: &Args, root: &Path, expect_no_targets: bool) -> Result<u8, String> {
     if args.command == "evidence" {
-        let result = java::evidence_status(root)?;
+        let mut result = java::evidence_status_with_selection(root, &evidence_selection(args))?;
+        if expect_no_targets && !targets::discover(root)?.is_empty() {
+            result = stale_target_selection();
+        }
         output(args, &result);
         return Ok(if result["status"] == "passed" { 0 } else { 1 });
     }
@@ -413,29 +439,49 @@ fn execute_java(args: &Args, root: &Path) -> Result<u8, String> {
         return Ok(if result["status"] == "passed" { 0 } else { 1 });
     }
     let analysis = java::analyze(root, &options)?;
+    if expect_no_targets && !targets::discover(root)?.is_empty() {
+        output(args, &stale_target_selection());
+        return Ok(1);
+    }
     let mut result=match args.command.as_str() {
         "generate" => java::generate(root,&analysis,args.check_generated)?,
         "check" => java::generate(root,&analysis,true)?,
         "inspect" | "compile" => {
             let value=json!({"status":java::static_status(&analysis),"analysis":analysis});
-            if args.command=="compile" && java::static_status(&analysis)=="passed" {
-                if let Some(path)=&args.out {
-                    let target=if path.is_absolute(){path.clone()}else{root.join(path)};
-                    fs::write(target,serde_json::to_vec_pretty(&value).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
-                } else {
-                    evidence::save(root,"program.json",&value)?;
-                }
-            }
             value
         },
-        "verify" => java::verify(root,&analysis,&args.runner,args.timeout.unwrap_or(120))?,
+        "verify" => java::verify_with_target_selection(root,&analysis,&args.runner,args.timeout.unwrap_or(120),None,expect_no_targets.then_some(&[]))?,
         _ => return Err(format!("{} is not supported by the generated Java workflow; use generate, check, inspect, compile, review, verify, or evidence with --java",args.command)),
     };
+    if expect_no_targets && !targets::discover(root)?.is_empty() {
+        result["status"] = json!("stale");
+        result["fresh"] = json!(false);
+        result["message"] = stale_target_selection()["message"].clone();
+        if args.command == "verify" && result.get("workspace_revision").is_some() {
+            evidence::save(root, "java-evidence.json", &result)?;
+        }
+    }
     if args.command == "generate" && !targets::discover(root)?.is_empty() {
         result["target_conformance"] = json!("not_checked");
         result["target_hint"] = json!("Generation updates implementation facts. Run conform or check with explicit --target paths to check architecture targets.");
     }
     let passed = result["status"] == "passed";
+    if passed && args.command == "compile" {
+        if let Some(path) = &args.out {
+            let target = if path.is_absolute() {
+                path.clone()
+            } else {
+                root.join(path)
+            };
+            fs::write(
+                target,
+                serde_json::to_vec_pretty(&result).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+        } else {
+            evidence::save(root, "program.json", &result)?;
+        }
+    }
     output(args, &result);
     Ok(if passed { 0 } else { 1 })
 }
@@ -481,23 +527,24 @@ fn execute(args: &Args) -> Result<u8, String> {
     if !target_paths.is_empty() || matches!(args.command.as_str(), "lint" | "conform") {
         return execute_targets(args, &root, &target_paths);
     }
-    if matches!(
+    let generated = matches!(
         args.command.as_str(),
-        "check" | "inspect" | "compile" | "verify" | "evidence"
-    ) {
+        "check" | "inspect" | "compile" | "review" | "verify" | "source" | "evidence"
+    ) && generated_entry(&root, args.entry.as_deref())?;
+    let explicit_legacy = args.entry.is_some() && !args.java && !generated;
+    let discover_targets = !explicit_legacy
+        && matches!(
+            args.command.as_str(),
+            "check" | "inspect" | "compile" | "verify" | "evidence"
+        );
+    if discover_targets {
         let discovered = targets::discover(&root)?;
         if !discovered.is_empty() {
             return execute_targets(args, &root, &[]);
         }
     }
-    if args.java
-        || args.command == "generate"
-        || (matches!(
-            args.command.as_str(),
-            "check" | "inspect" | "compile" | "review" | "verify" | "source" | "evidence"
-        ) && generated_entry(&root, args.entry.as_deref())?)
-    {
-        return execute_java(args, &root);
+    if args.java || args.command == "generate" || generated {
+        return execute_java(args, &root, discover_targets);
     }
     if args.command == "init" {
         let entry = args
@@ -540,13 +587,17 @@ fn execute(args: &Args) -> Result<u8, String> {
         return Ok(code);
     }
     if args.command == "review" {
-        let result = review::review(
+        let mut result = review::review(
             &root,
             args.base
                 .as_deref()
                 .ok_or("review requires --base <Git revision>")?,
             args.entry.as_deref(),
         )?;
+        result["target_changes"] = json!(targets::review_changes(
+            &root,
+            args.base.as_deref().unwrap()
+        )?);
         output(args, &result);
         return Ok(0);
     }

@@ -143,6 +143,37 @@ def main():
         print("PASS: renaming the same database resource cannot escape the target", flush=True)
 
         restore()
+        alias_mapping = app / JAVA_PACKAGE / "AliasMapping.java"
+        alias_mapping.write_text('''package dev.vitrifi.example.checkout;
+import dev.vitrifi.api.ResourceTable;
+@ResourceTable(value = "Carts", table = "carts")
+final class AliasMapping {}
+''')
+        repository.write_text(original_repository
+            .replace('@ResourceTable(value = "Carts", table = "carts")',
+                     '@ResourceTable(value = "Other", table = "public.carts")')
+            .replace("FROM carts", "FROM public.carts")
+            .replace("UPDATE carts", "UPDATE public.carts"))
+        java.write_text(original.replace("return carts.load(cartId);",
+            'carts.save(cartId, 0, "alias");\n        return carts.load(cartId);'))
+        target.write_text(original_target
+            .replace('resource Carts table "carts";',
+                     'resource Carts table "carts";\n  resource Other table "public.carts";')
+            .replace("effects [read Carts, write Carts];",
+                     "effects [read Carts, write Carts, read Other, write Other];")
+            .replace("effects [read Carts];", "effects [read Carts, read Other, write Other];"))
+        # The source policy still forbids Carts, while the SQL maps the same H2
+        # table to Other. Regenerating that source view must not approve it.
+        assert command("generate", explicit_target=False)["status"] == "passed"
+        alias = command("conform", expected=1)
+        diagnose(alias, "alias", "table")
+        blocked = command("verify", expected=1, extra=("--", sys.executable, "-c",
+            "raise SystemExit('ambiguous aliases must fail before execution')"))
+        assert blocked["status"] == "failed", blocked
+        alias_mapping.unlink()
+        print("PASS: qualified/unqualified table aliases cannot grant a forbidden write", flush=True)
+
+        restore()
         counted = append_member(original, "\n    public int count() { return 1; }\n")
         java.write_text(counted)
         extra_entry = command("conform", expected=1)
@@ -166,6 +197,42 @@ def main():
         assert unknown["status"] == "incomplete", unknown
         diagnose(unknown, "unknown", "unresolved")
         print("PASS: unsupported Supplier dispatch remains incomplete", flush=True)
+
+        restore()
+        foreign = app / "src/main/java/forbidden/Value.java"
+        foreign.parent.mkdir(parents=True)
+        foreign.write_text("package forbidden; public record Value(int value) {}\n")
+        java.write_text(original.replace("return carts.load(cartId);",
+            "new forbidden.Value(1).value();\n        return carts.load(cartId);"))
+        missing_boundary = command("conform", expected=1)
+        diagnose(missing_boundary, "boundary")
+        target.write_text(original_target.replace("  operation applyCoupon",
+            '  boundary Foreign java ["forbidden.Value"];\n\n  operation applyCoupon'))
+        denied_boundary = command("conform", expected=1)
+        diagnose(denied_boundary, "unpermitted", "dependency")
+        target.write_text(target.read_text().replace("dependencies [Storage];",
+                                                     "dependencies [Storage, Foreign];"))
+        assert command("conform")["status"] == "passed"
+        foreign.unlink()
+        print("PASS: intrinsic record constructors and accessors still require boundary permission", flush=True)
+
+        restore()
+        unrelated = app / JAVA_PACKAGE / "Unrelated.java"
+        unrelated.write_text('''package dev.vitrifi.example.checkout;
+import dev.vitrifi.api.Feature;
+import dev.vitrifi.api.NoEffectOnError;
+import java.util.function.Supplier;
+@Feature(value = "Unrelated", purpose = "Independent unknown feature")
+public class Unrelated {
+    @NoEffectOnError(action = "write", resource = "Carts")
+    public Cart load(Supplier<Cart> supplier) { return supplier.get(); }
+}
+''')
+        assert command("conform")["status"] == "passed"
+        selected = command("verify", extra=("--", *runner, "test"))
+        assert selected["status"] == "passed" and not selected["evidence_gaps"], selected
+        unrelated.unlink()
+        print("PASS: selected target verification does not require an unrelated feature's graph or policies", flush=True)
 
         restore()
         java.write_text(original.replace(forbid, "").replace("return carts.load(cartId);",

@@ -88,7 +88,7 @@ impl Fixture {
             .join(java::output_paths(analysis).unwrap()["Example.Read"].clone())
     }
     fn record_evidence(&self, analysis: &java::Analysis) {
-        evidence::save(self.path(),"java-evidence.json",&json!({"status":"passed","inputs":analysis.inputs,"revision":analysis.revision,"workspace_revision":compiler::workspace_digest(self.path()).unwrap()})).unwrap();
+        evidence::save(self.path(),"java-evidence.json",&json!({"status":"passed","inputs":analysis.inputs,"selection":analysis.selection,"revision":analysis.revision,"workspace_revision":compiler::workspace_digest(self.path()).unwrap()})).unwrap();
         assert_eq!(java::evidence_status(self.path()).unwrap()["fresh"], true);
     }
 }
@@ -133,6 +133,7 @@ fn resolved(target: &str) -> SourceCall {
         line: 1,
         column: 42,
         target: Some(target.into()),
+        source_owner: None,
         resolution: CallResolution::Resolved,
         reason: "source-resolved method".into(),
     }
@@ -239,6 +240,7 @@ fn unknown_effects_reachable_through_a_source_helper_prevent_a_clean_result() {
         line: 2,
         column: 5,
         target: None,
+        source_owner: None,
         resolution: CallResolution::Unknown,
         reason: "ambiguous dispatch".into(),
     });
@@ -296,6 +298,111 @@ fn generated_cli_routes_evidence_and_only_compiles_successful_analysis() {
     assert_eq!(fs::read_to_string(target).unwrap(), "existing model");
     let report: serde_json::Value = serde_json::from_slice(&rejected.stdout).unwrap();
     assert_eq!(report["status"], "failed");
+}
+
+#[test]
+fn evidence_must_match_explicit_java_input_selections() {
+    let fixture = Fixture::new();
+    fixture.write("src/other/Other.java", b"class Other {}\n");
+    fixture.write(".tools/other-analyzer.jar", b"adapter fixture");
+    let original_classpath = fs::read(fixture.path().join("target/classpath.txt")).unwrap();
+    fixture.write("target/other-classpath.txt", &original_classpath);
+    let analysis = fixture.analyze();
+    fixture.record_evidence(&analysis);
+    let same = java::EvidenceSelection {
+        source_root: Some("src/main/java".into()),
+        analyzer: Some(".tools/analyzer.jar".into()),
+        classpath_file: Some("target/classpath.txt".into()),
+    };
+    assert_eq!(
+        java::evidence_status_with_selection(fixture.path(), &same).unwrap()["status"],
+        "passed"
+    );
+    for changed in [
+        java::EvidenceSelection {
+            source_root: Some("src/other".into()),
+            ..same.clone()
+        },
+        java::EvidenceSelection {
+            analyzer: Some(".tools/other-analyzer.jar".into()),
+            ..same.clone()
+        },
+        java::EvidenceSelection {
+            classpath_file: Some("target/other-classpath.txt".into()),
+            ..same.clone()
+        },
+    ] {
+        let report = java::evidence_status_with_selection(fixture.path(), &changed).unwrap();
+        assert_eq!(report["status"], "stale", "{report}");
+        assert_eq!(report["fresh"], false);
+        assert!(!report["selection_gaps"].as_array().unwrap().is_empty());
+    }
+    // Old evidence remains readable, but cannot attest to a newly selected input.
+    evidence::save(
+        fixture.path(),
+        "java-evidence.json",
+        &json!({
+            "status":"passed", "inputs":analysis.inputs,
+            "workspace_revision":compiler::workspace_digest(fixture.path()).unwrap()
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        java::evidence_status(fixture.path()).unwrap()["status"],
+        "passed"
+    );
+    assert_eq!(
+        java::evidence_status_with_selection(fixture.path(), &same).unwrap()["status"],
+        "stale"
+    );
+}
+
+#[test]
+fn analysis_rejects_source_root_symlinks_before_accepting_an_adapter_model() {
+    let fixture = Fixture::new();
+    std::os::unix::fs::symlink("main/java", fixture.path().join("src/selected")).unwrap();
+    let mut options = fixture.options();
+    options.source_root = "src/selected".into();
+    assert!(java::analyze(fixture.path(), &options)
+        .err()
+        .unwrap()
+        .contains("Symlinked"));
+}
+
+#[test]
+fn retargeted_input_aliases_invalidate_saved_evidence_without_new_flags() {
+    for selection in ["analyzer", "classpath", "dependency"] {
+        let fixture = Fixture::new();
+        fixture.write(".tools/other-analyzer.jar", b"other analyzer");
+        let cp = fs::read(fixture.path().join("target/classpath.txt")).unwrap();
+        fixture.write("target/other-classpath.txt", &cp);
+        let mut options = fixture.options();
+        let (link, before, after) = match selection {
+            "analyzer" => {
+                options.analyzer = ".tools/selected.jar".into();
+                (".tools/selected.jar", "analyzer.jar", "other-analyzer.jar")
+            }
+            "classpath" => {
+                options.classpath_file = "target/selected-classpath.txt".into();
+                (
+                    "target/selected-classpath.txt",
+                    "classpath.txt",
+                    "other-classpath.txt",
+                )
+            }
+            _ => {
+                fixture.classpath(&["target/selected.jar"]);
+                ("target/selected.jar", "a.jar", "b.jar")
+            }
+        };
+        std::os::unix::fs::symlink(before, fixture.path().join(link)).unwrap();
+        let analysis = java::analyze(fixture.path(), &options).unwrap();
+        fixture.record_evidence(&analysis);
+        fs::remove_file(fixture.path().join(link)).unwrap();
+        std::os::unix::fs::symlink(after, fixture.path().join(link)).unwrap();
+        let evidence = java::evidence_status(fixture.path()).unwrap();
+        assert_eq!(evidence["status"], "stale", "{selection}: {evidence}");
+    }
 }
 
 #[test]

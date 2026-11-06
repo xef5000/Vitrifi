@@ -24,6 +24,10 @@ pub struct SourceCall {
     pub line: usize,
     pub column: usize,
     pub target: Option<String>,
+    /// Declaring source class for summarized members with no callable body,
+    /// such as generated Java record constructors and component accessors.
+    #[serde(default)]
+    pub source_owner: Option<String>,
     pub resolution: CallResolution,
     pub reason: String,
 }
@@ -117,9 +121,18 @@ mod tests {
     }
 
     #[test]
+    fn calls_from_old_adapters_remain_readable_without_source_owner() {
+        let call: SourceCall = serde_json::from_str(
+            r#"{"expression":"record.value()","line":1,"column":1,"target":null,"resolution":"intrinsic","reason":"record accessor"}"#,
+        )
+        .unwrap();
+        assert_eq!(call.source_owner, None);
+    }
+
+    #[test]
     fn derived_program_retains_independent_public_api_and_resource_inventory() {
         let inventory = SourceInventory {
-            version: 1,
+            version: 2,
             classes: vec![SourceClass {
                 name: "demo.App".into(),
                 path: "src/App.java".into(),

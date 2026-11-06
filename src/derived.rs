@@ -69,6 +69,33 @@ pub struct DerivedProgram {
     pub inventory: Option<SourceInventory>,
 }
 
+/// Keep adapter diagnostics global, but apply source policies only to operations
+/// in the selected target graph. Policy result IDs retain the correct scope even
+/// when multiple operations share a source line.
+pub(crate) fn scoped_diagnostics(
+    program: &DerivedProgram,
+    selected: &BTreeSet<String>,
+) -> Vec<Diagnostic> {
+    let mut diagnostics: Vec<_> = program
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code != "FORBIDDEN_EFFECT")
+        .cloned()
+        .collect();
+    for result in &program.policy_results {
+        if result.status == PolicyStatus::Violated && selected.contains(&result.operation_id) {
+            if let Some(operation) = program.operations.get(&result.operation_id) {
+                diagnostics.push(Diagnostic {
+                    code: "FORBIDDEN_EFFECT".into(),
+                    message: result.message.clone(),
+                    location: at(&operation.source),
+                });
+            }
+        }
+    }
+    diagnostics
+}
+
 fn at(source: &SourceOperation) -> Location {
     Location {
         path: source.path.clone(),
@@ -749,7 +776,7 @@ pub fn facts(program: &DerivedProgram) -> BTreeMap<String, Value> {
     }
     for (id, operation) in &program.operations {
         let source = &operation.source;
-        let calls=sorted_values(source.calls.iter().map(|call|json!({"expression":one_line(&call.expression),"target":call.target,"resolution":call.resolution,"reason":one_line(&call.reason)})));
+        let calls=sorted_values(source.calls.iter().map(|call|json!({"expression":one_line(&call.expression),"target":call.target,"source_owner":call.source_owner,"resolution":call.resolution,"reason":one_line(&call.reason)})));
         let unknowns = sorted_values(operation.reachable_unknowns.iter().map(semantic_unknown));
         result.insert(format!("operation {id}"),json!({"path":source.path,"symbol":source.symbol,"language":source.language,
             "native_signature":one_line(&source.signature),"parameters":source.parameters,"returns":source.returns,
@@ -794,6 +821,7 @@ mod tests {
             line: 7,
             column: 4,
             target: Some(target.into()),
+            source_owner: None,
             resolution: CallResolution::Resolved,
             reason: "javac-resolved source method".into(),
         }
@@ -804,6 +832,7 @@ mod tests {
             line: 8,
             column: 2,
             target: None,
+            source_owner: None,
             resolution: CallResolution::Unknown,
             reason: "unresolved dynamic dispatch".into(),
         }
@@ -1032,6 +1061,27 @@ mod tests {
         a.signature = "java.lang.String a()".into();
         a.returns = "java.lang.String".into();
         assert_ne!(facts(&before), facts(&program(vec![a])));
+    }
+    #[test]
+    fn semantic_facts_preserve_summarized_source_member_owners() {
+        let mut entry = feature_root("entry");
+        entry.calls.push(SourceCall {
+            expression: "record.value()".into(),
+            line: 1,
+            column: 1,
+            target: None,
+            source_owner: Some("demo.AllowedRecord".into()),
+            resolution: CallResolution::Intrinsic,
+            reason: "summarized source record accessor".into(),
+        });
+        let before = program(vec![entry.clone()]);
+        assert!(before.operations["entry"].reachable_unknowns.is_empty());
+        assert_eq!(
+            facts(&before)["operation entry"]["calls"][0]["source_owner"],
+            "demo.AllowedRecord"
+        );
+        entry.calls[0].source_owner = Some("demo.RestrictedRecord".into());
+        assert_ne!(facts(&before), facts(&program(vec![entry])));
     }
     #[test]
     fn duplicate_ids_and_invalid_feature_names_are_diagnostics_not_silent_overwrites() {

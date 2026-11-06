@@ -103,7 +103,7 @@ class SourceAnalyzerTest {
         Map<String, Object> removed = analyze(source.replace("@Feature(\"Checkout\") ", ""));
         clean(original);
         clean(removed);
-        assertEquals(1, inventory(original).get("version"));
+        assertEquals(2, inventory(original).get("version"));
         assertEquals(sourceClass(original, "demo.Checkout"), sourceClass(removed, "demo.Checkout"));
         assertEquals(List.of("demo.Checkout.extra(long)", "demo.Checkout.run(int)"),
                 sourceClass(removed, "demo.Checkout").get("public_methods"));
@@ -230,6 +230,100 @@ class SourceAnalyzerTest {
         assertEquals(List.of("demo.Checkout.run()"), sourceClass(result, "demo.Checkout").get("public_methods"));
         assertEquals(List.of("demo.Checkout.Nested.extra()"), sourceClass(result, "demo.Checkout.Nested").get("public_methods"));
         assertEquals("long", operation(result, "demo.Checkout.Nested.extra()").get("returns"));
+    }
+
+    @Test void public_static_entries_expose_initialization_gaps_without_an_analyzed_caller() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                import dev.vitrifi.api.*;
+                @Feature("Checkout") class Checkout {
+                    static { System.getenv("UNMODELED"); }
+                    public static int run() { return 1; }
+                }
+                class FieldEntry {
+                    static Object value = System.getenv("UNMODELED");
+                    public static int run() { return 1; }
+                }
+                class ConstantEntry {
+                    static final int value = 1;
+                    public static int run() { return value; }
+                }
+                """);
+        clean(result);
+        for (String name : List.of("Checkout", "FieldEntry")) {
+            assertEquals(List.of("Public static entry can trigger unmodeled class initialization: demo." + name + ".run()"),
+                    sourceClass(result, "demo." + name).get("unsupported_api"));
+            assertEquals(List.of(), operation(result, "demo." + name + ".run()").get("calls"));
+        }
+        assertEquals(List.of(), sourceClass(result, "demo.ConstantEntry").get("unsupported_api"));
+    }
+
+    @Test void static_entry_initialization_includes_superclasses_and_default_method_interfaces() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                class Parent { static { System.getenv("UNMODELED"); } }
+                class ParentEntry extends Parent { public static int run() { return 1; } }
+                interface DefaultInit {
+                    Object value = System.getenv("UNMODELED");
+                    default int helper() { return 1; }
+                }
+                interface Indirect extends DefaultInit {}
+                class DefaultEntry implements Indirect {
+                    public static int run() { return 1; }
+                    public int helper() { return 1; }
+                }
+                interface NoDefaultInit {
+                    Object value = System.getenv("NOT_INITIALIZED_BY_CLASS");
+                    void consume();
+                }
+                class NoDefaultEntry implements NoDefaultInit {
+                    public static int run() { return 1; }
+                    public void consume() {}
+                }
+                """);
+        clean(result);
+        for (String name : List.of("ParentEntry", "DefaultEntry")) {
+            assertEquals(List.of("Public static entry can trigger unmodeled class initialization: demo." + name + ".run()"),
+                    sourceClass(result, "demo." + name).get("unsupported_api"));
+        }
+        assertEquals(List.of(), sourceClass(result, "demo.NoDefaultEntry").get("unsupported_api"));
+    }
+
+    @Test void public_generic_and_covariant_overrides_expose_unmodeled_bridges() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                interface Convert<T> { T convert(T value); }
+                interface Strings extends Convert<String> {}
+                class GenericEntry implements Strings {
+                    public String convert(String value) { return value; }
+                }
+                class Parent { public Number value() { return null; } }
+                class CovariantEntry extends Parent { public Integer value() { return null; } }
+                class ExternalEntry implements java.util.function.Function<String, String> {
+                    public String apply(String value) { return value; }
+                }
+                """);
+        clean(result);
+        assertEquals(List.of("demo.GenericEntry.convert(java.lang.String)"),
+                sourceClass(result, "demo.GenericEntry").get("public_methods"));
+        assertEquals(List.of("Public override requires an unmodeled compiler bridge: demo.GenericEntry.convert(java.lang.String) overrides demo.Convert.convert(java.lang.Object)"),
+                sourceClass(result, "demo.GenericEntry").get("unsupported_api"));
+        assertEquals(List.of("Public override requires an unmodeled compiler bridge: demo.CovariantEntry.value() overrides demo.Parent.value()"),
+                sourceClass(result, "demo.CovariantEntry").get("unsupported_api"));
+        assertTrue(sourceClass(result, "demo.ExternalEntry").get("unsupported_api").toString()
+                .contains("demo.ExternalEntry.apply(java.lang.String) overrides java.util.function.Function.apply(java.lang.Object)"));
+    }
+
+    @Test void ordinary_overrides_do_not_fabricate_bridge_gaps() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                interface Api { Number value(); }
+                class PlainEntry implements Api { public Number value() { return null; } }
+                class OverrideEntry extends PlainEntry { public Number value() { return null; } }
+                """);
+        clean(result);
+        assertEquals(List.of(), sourceClass(result, "demo.PlainEntry").get("unsupported_api"));
+        assertEquals(List.of(), sourceClass(result, "demo.OverrideEntry").get("unsupported_api"));
     }
 
     @Test void resolves_real_spring_injection_jdbc_effects_and_row_mapper_body() throws Exception {
@@ -492,6 +586,46 @@ class SourceAnalyzerTest {
                 .anyMatch(c -> "demo/Checkout.java::demo.Cart.total()".equals(c.get("target"))));
         assertEquals("demo/Checkout.java::demo.Effects.write()", list(operation(result, "demo.Cart.total()"), "calls").getFirst().get("target"));
         assertEquals(List.of(Map.of("action", "write", "resource", "Carts")), operation(result, "demo.Effects.write()").get("direct_effects"));
+    }
+
+    @Test void summarized_record_calls_retain_source_owners_without_changing_effect_summaries() throws Exception {
+        Map<String, Object> result = analyze(CHECKOUT);
+        clean(result);
+        Map<String, Object> apply = operation(result, "demo.Checkout.apply(java.lang.String)");
+        List<Map<String, Object>> accessors = list(apply, "calls").stream()
+                .filter(c -> c.get("expression").equals("cart.total")).toList();
+        assertEquals(2, accessors.size());
+        for (Map<String, Object> call : accessors) {
+            assertEquals("intrinsic", call.get("resolution"));
+            assertEquals("demo.Cart", call.get("source_owner"));
+            assertNull(call.get("target"));
+        }
+        Map<String, Object> callback = operation(result, "demo.SqlRepo.load(java.lang.String)$rowMapper1");
+        Map<String, Object> construction = list(callback, "calls").stream()
+                .filter(c -> c.get("expression").equals("new Cart")).findFirst().orElseThrow();
+        assertEquals("intrinsic", construction.get("resolution"));
+        assertEquals("demo.Cart", construction.get("source_owner"));
+        assertNull(construction.get("target"));
+        assertEquals(List.of(), callback.get("direct_effects"));
+        assertTrue(list(apply, "calls").stream().filter(c -> c.get("expression").equals("Math.max")
+                || c.get("expression").equals("new IllegalArgumentException")).allMatch(c -> !c.containsKey("source_owner")));
+        assertTrue(list(callback, "calls").stream().filter(c -> c.get("expression").toString().startsWith("rs."))
+                .allMatch(c -> !c.containsKey("source_owner")));
+    }
+
+    @Test void summarized_nested_record_calls_use_the_canonical_source_owner() throws Exception {
+        Map<String, Object> result = analyze("""
+                package demo;
+                class Values { record Cart(int total) {} }
+                class Checkout {
+                    public int run(Values.Cart cart) { return new Values.Cart(cart.total()).total(); }
+                }
+                """);
+        clean(result);
+        List<Map<String, Object>> calls = list(operation(result, "demo.Checkout.run(demo.Values.Cart)"), "calls");
+        assertEquals(3, calls.size());
+        assertTrue(calls.stream().allMatch(c -> c.get("resolution").equals("intrinsic")
+                && c.get("source_owner").equals("demo.Values.Cart") && c.get("target") == null), Json.write(calls));
     }
 
     @Test void shared_sql_classifier_rejects_hidden_tables_sequences_and_functions() {

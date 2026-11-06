@@ -110,7 +110,7 @@ public final class SourceAnalyzer {
             serialized.add(operation.data);
         }
         return map("operations", serialized, "diagnostics", diagnostics,
-                "inventory", map("version", 1, "classes", classInventory(), "resources", resourceInventory.stream()
+                "inventory", map("version", 2, "classes", classInventory(), "resources", resourceInventory.stream()
                         .sorted(Comparator.comparing(r -> r.get("owner").toString())).toList()));
     }
 
@@ -125,6 +125,7 @@ public final class SourceAnalyzer {
             if (!info.type.getTypeParameters().isEmpty()) {
                 unsupported.add("Covered class has unmodeled generic type parameter bounds: " + info.type.getQualifiedName());
             }
+            List<ExecutableElement> inherited = inheritedMethods(info.type);
             for (Element member : info.type.getEnclosedElements()) {
                 if (!(member instanceof ExecutableElement method) || method.getKind() != ElementKind.METHOD
                         || !method.getModifiers().contains(Modifier.PUBLIC)) continue;
@@ -134,6 +135,15 @@ public final class SourceAnalyzer {
                 }
                 if (method.getModifiers().contains(Modifier.NATIVE)) {
                     unsupported.add("Public native method has no analyzable Java body: " + qualifiedMethod(method));
+                }
+                if (method.getModifiers().contains(Modifier.STATIC) && !entryInitializersSafe(info.type)) {
+                    unsupported.add("Public static entry can trigger unmodeled class initialization: " + qualifiedMethod(method));
+                }
+                for (ExecutableElement parent : inherited) {
+                    if (elements.overrides(method, parent, info.type) && differentErasedDescriptor(method, parent)) {
+                        unsupported.add("Public override requires an unmodeled compiler bridge: "
+                                + qualifiedMethod(method) + " overrides " + qualifiedMethod(parent));
+                    }
                 }
                 if (!methods.containsKey(method)) {
                     unsupported.add("Public method has no analyzed source declaration: " + qualifiedMethod(method));
@@ -152,6 +162,34 @@ public final class SourceAnalyzer {
         }
         result.sort(Comparator.comparing(c -> c.get("name").toString()));
         return result;
+    }
+
+    private List<ExecutableElement> inheritedMethods(TypeElement type) {
+        List<ExecutableElement> result = new ArrayList<>();
+        Set<TypeElement> seen = new HashSet<>();
+        Deque<TypeMirror> pending = new ArrayDeque<>(types.directSupertypes(type.asType()));
+        while (!pending.isEmpty()) {
+            TypeMirror next = pending.removeFirst();
+            if (!(next instanceof DeclaredType declared) || !(declared.asElement() instanceof TypeElement parent)
+                    || !seen.add(parent)) continue;
+            for (Element member : parent.getEnclosedElements()) {
+                if (member instanceof ExecutableElement method && method.getKind() == ElementKind.METHOD) result.add(method);
+            }
+            pending.addAll(types.directSupertypes(next));
+        }
+        return result;
+    }
+
+    private boolean differentErasedDescriptor(ExecutableElement method, ExecutableElement parent) {
+        // Compare the original declarations, not asMemberOf: substitution would
+        // hide exactly the erased signatures for which javac emits a bridge.
+        if (!types.isSameType(types.erasure(method.getReturnType()), types.erasure(parent.getReturnType()))) return true;
+        if (method.getParameters().size() != parent.getParameters().size()) return true;
+        for (int index = 0; index < method.getParameters().size(); index++) {
+            if (!types.isSameType(types.erasure(method.getParameters().get(index).asType()),
+                    types.erasure(parent.getParameters().get(index).asType()))) return true;
+        }
+        return false;
     }
 
     private void register(CompilationUnitTree unit) {
@@ -383,8 +421,8 @@ public final class SourceAnalyzer {
                     }
                 }
             } else if (intrinsic(method, operation.jdbcMapper)) {
-                call(operation, getCurrentPath(), node.getMethodSelect().toString(), null, "intrinsic",
-                        "bounded standard-library summary for " + qualifiedMethod(method));
+                intrinsicCall(operation, getCurrentPath(), node.getMethodSelect().toString(), method,
+                        "bounded intrinsic summary for " + qualifiedMethod(method));
             } else {
                 Operation declaredTarget = methods.get(method);
                 ExpressionTree receiver = node.getMethodSelect() instanceof MemberSelectTree select ? select.getExpression() : null;
@@ -409,7 +447,8 @@ public final class SourceAnalyzer {
                 if (known != null && classInitializersSafe(owner)) {
                     call(operation, getCurrentPath(), "new " + node.getIdentifier(), known.id, "resolved", "javac-resolved source constructor; no unmodeled class initializers");
                 } else if (plainRecord(owner) || standardExceptionConstructor(constructor)) {
-                    call(operation, getCurrentPath(), "new " + node.getIdentifier(), null, "intrinsic", "bounded value-record or standard exception construction summary");
+                    intrinsicCall(operation, getCurrentPath(), "new " + node.getIdentifier(), constructor,
+                            "bounded value-record or standard exception construction summary");
                 } else {
                     call(operation, getCurrentPath(), "new " + node.getIdentifier(), null, "unknown", "constructor body or initialization effects are not modeled: " + owner.getQualifiedName());
                 }
@@ -688,6 +727,29 @@ public final class SourceAnalyzer {
         return true;
     }
 
+    private boolean entryInitializersSafe(TypeElement type) {
+        if (!classInitializersSafe(type)) return false;
+        if (type.getSuperclass() instanceof DeclaredType parent
+                && parent.asElement() instanceof TypeElement superclass
+                && !superclass.getQualifiedName().contentEquals("java.lang.Object")
+                && !entryInitializersSafe(superclass)) return false;
+        return defaultInterfaceInitializersSafe(type, new HashSet<>());
+    }
+
+    private boolean defaultInterfaceInitializersSafe(TypeElement type, Set<TypeElement> seen) {
+        if (!seen.add(type)) return true;
+        // Initializing a class also initializes superinterfaces declaring default
+        // methods, including those reached through an intermediate interface.
+        if (type.getKind() == ElementKind.INTERFACE && type.getEnclosedElements().stream()
+                .anyMatch(member -> member.getModifiers().contains(Modifier.DEFAULT))
+                && !classInitializersSafe(type)) return false;
+        for (TypeMirror mirror : type.getInterfaces()) {
+            if (mirror instanceof DeclaredType declared && declared.asElement() instanceof TypeElement parent
+                    && !defaultInterfaceInitializersSafe(parent, seen)) return false;
+        }
+        return true;
+    }
+
     private boolean isRegistered(TypeElement type) {
         return beans.stream().anyMatch(b -> b.supported && type.equals(b.concrete));
     }
@@ -811,6 +873,14 @@ public final class SourceAnalyzer {
         Map<String, Object> at = location(path);
         operation.calls.add(map("expression", expression, "line", at.get("line"), "column", at.get("column"),
                 "target", target, "resolution", resolution, "reason", reason));
+    }
+
+    private void intrinsicCall(Operation operation, TreePath path, String expression, ExecutableElement method, String reason) {
+        call(operation, path, expression, null, "intrinsic", reason);
+        TypeElement owner = (TypeElement) method.getEnclosingElement();
+        if (sourceTypes.contains(owner)) {
+            operation.calls.getLast().put("source_owner", owner.getQualifiedName().toString());
+        }
     }
 
     private static Map<String, Object> effect(String action, String resource) { return map("action", action, "resource", resource); }

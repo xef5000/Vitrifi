@@ -50,7 +50,7 @@ impl Fixture {
             "parameters":[],"returns":"int","feature":{"name":"Example","purpose":"Preview"},
             "calls":[],"direct_effects":[{"action":"read","resource":"Carts"}],
             "policies":if policy {vec![rule]} else {vec![]}
-        }],"inventory":if inventory {json!({"version":1,"classes":[{
+        }],"inventory":if inventory {json!({"version":2,"classes":[{
             "name":"example.App","path":"src/main/java/App.java","public_methods":["example.App.preview()"],"unsupported_api":[]
         }],"resources":[{"owner":"example.App","path":"src/main/java/App.java","table":"carts","resource":"Carts"}]})} else {Value::Null}});
         let literal = serde_json::to_string(&model)
@@ -120,6 +120,13 @@ fn mixed_directory_check_and_verify_cannot_ignore_authored_policy() {
     assert!(fixture.run(&["check"]).0);
 
     fixture.adapter(true, false);
+    let (passed, positional) = fixture.run(&["check", "src/main/java/Example.vitrifi"]);
+    assert!(!passed, "{positional}");
+    assert!(positional["conformance"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|d| d["code"] == "TARGET_POLICY_ANNOTATION"));
     let (passed, check) = fixture.run(&["check", "--java"]);
     assert!(!passed);
     assert!(check["conformance"]["diagnostics"]
@@ -174,11 +181,51 @@ fn automatic_selection_cannot_pass_if_another_target_appears_during_analysis() {
 }
 
 #[test]
+fn initially_empty_target_selection_is_rechecked_before_output_or_execution() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.root.join(TARGET)).unwrap();
+    fixture.adapter(true, true);
+    assert!(fixture.run(&["generate"]).0);
+    let adapter = fs::read_to_string(fixture.root.join(".tools/java")).unwrap();
+    let added = fixture
+        .root
+        .join(TARGET)
+        .to_str()
+        .unwrap()
+        .replace('\'', "'\\''");
+    fixture.write(
+        ".tools/java",
+        &adapter.replacen(
+            "#!/bin/sh\n",
+            &format!("#!/bin/sh\nprintf '%s\\n' 'target feature Added {{}}' > '{added}'\n"),
+            1,
+        ),
+    );
+    for command in ["check", "inspect", "compile", "verify"] {
+        let mut args = vec![command, "--java"];
+        if command == "verify" {
+            args.extend(["--", "sh", "-c", "touch should-not-exist"]);
+        }
+        let (passed, report) = fixture.run(&args);
+        assert!(!passed, "{command}: {report}");
+        assert_eq!(report["status"], "stale", "{command}: {report}");
+        assert_eq!(report["executed"], false);
+        assert!(!fixture.root.join("should-not-exist").exists());
+        assert!(!fixture.root.join(".vitrifi/program.json").exists());
+        assert!(!fixture.root.join(".vitrifi/java-evidence.json").exists());
+        fs::remove_file(fixture.root.join(TARGET)).unwrap();
+    }
+}
+
+#[test]
 fn evidence_requires_selected_target_identity_and_tracks_target_contents() {
     let fixture = Fixture::new();
     fixture.adapter(true, true);
     let selected = targets::load(&fixture.root, &[TARGET.into()]).unwrap();
     let mut report = json!({"status":"passed","inputs":selected.inputs,
+        "selection":{"source_root":fixture.root.join("src/main/java"),
+            "analyzer":fixture.root.join(".tools/analyzer.jar"),
+            "classpath_file":fixture.root.join("target/classpath.txt")},
         "workspace_revision":compiler::workspace_digest(&fixture.root).unwrap()});
     // A previously passing generated-only session does not prove the new target.
     evidence::save(&fixture.root, "java-evidence.json", &report).unwrap();
@@ -195,6 +242,41 @@ fn evidence_requires_selected_target_identity_and_tracks_target_contents() {
     let (passed, stale) = fixture.run(&["evidence", "--target", TARGET]);
     assert!(!passed);
     assert_eq!(stale["status"], "stale");
+}
+
+#[test]
+fn evidence_honors_explicit_java_input_selections_on_both_routes() {
+    for targeted in [true, false] {
+        let fixture = Fixture::new();
+        fixture.adapter(true, true);
+        if !targeted {
+            fs::remove_file(fixture.root.join(TARGET)).unwrap();
+        }
+        fixture.write("src/other/Other.java", "class Other {}");
+        fixture.write(".tools/other.jar", "another analyzer");
+        fixture.write("target/other-classpath.txt", "");
+        let mut report = json!({"status":"passed", "inputs":{},
+            "workspace_revision":compiler::workspace_digest(&fixture.root).unwrap(),
+            "selection":{"source_root":fixture.root.join("src/main/java"),
+                "analyzer":fixture.root.join(".tools/analyzer.jar"),
+                "classpath_file":fixture.root.join("target/classpath.txt")}});
+        if targeted {
+            let selected = targets::load(&fixture.root, &[TARGET.into()]).unwrap();
+            report["target"] =
+                json!({"revision":selected.revision,"files":selected.files,"entries":[]});
+        }
+        evidence::save(&fixture.root, "java-evidence.json", &report).unwrap();
+        assert!(fixture.run(&["evidence", "--java"]).0);
+        for (flag, path) in [
+            ("--source-root", "src/other"),
+            ("--java-analyzer", ".tools/other.jar"),
+            ("--classpath-file", "target/other-classpath.txt"),
+        ] {
+            let (passed, result) = fixture.run(&["evidence", "--java", flag, path]);
+            assert!(!passed, "{flag}: {result}");
+            assert_eq!(result["status"], "stale", "{flag}: {result}");
+        }
+    }
 }
 
 #[test]

@@ -660,6 +660,12 @@ fn source_owner(symbol: &str) -> Option<&str> {
         .map(|(owner, _)| owner)
 }
 
+fn tables_may_alias(left: &str, right: &str) -> bool {
+    left == right
+        || ((!left.contains('.') || !right.contains('.'))
+            && left.rsplit('.').next() == right.rsplit('.').next())
+}
+
 fn policy_effect(policy: &SourcePolicy) -> &ResourceEffect {
     match policy {
         SourcePolicy::Forbid { effect } | SourcePolicy::NoEffectOnError { effect } => effect,
@@ -709,7 +715,7 @@ pub fn lint(targets: &[TargetFeature]) -> Vec<Diagnostic> {
     let mut coverage = BTreeMap::new();
     let mut bindings = BTreeMap::new();
     let mut global_resources = BTreeMap::new();
-    let mut global_tables = BTreeMap::new();
+    let mut global_tables: BTreeMap<String, &String> = BTreeMap::new();
     for target in targets {
         let at = &target.location;
         if !target.name.split('.').all(identifier) || target.name.is_empty() {
@@ -804,18 +810,19 @@ pub fn lint(targets: &[TargetFeature]) -> Vec<Diagnostic> {
                     ));
                 }
             }
-            if let Some(previous) = global_tables.insert(table.clone(), &resource.name) {
-                if previous != &resource.name {
+            for (other_table, previous) in &global_tables {
+                if tables_may_alias(other_table, &table) && *previous != &resource.name {
                     errors.push(diagnostic(
                         "TARGET_RESOURCE_CONFLICT",
                         format!(
-                            "Table {table} maps to both {previous} and {}",
+                            "Tables {other_table} and {table} may refer to the same SQL table but map to both {previous} and {}; use consistent table identities and resource names",
                             resource.name
                         ),
                         &resource.location,
                     ));
                 }
             }
+            global_tables.insert(table, &resource.name);
         }
         for boundary in &target.boundaries {
             if !identifier(&boundary.name) || !names.insert(&boundary.name) {
@@ -1057,7 +1064,20 @@ pub fn conform(targets: &[TargetFeature], program: &DerivedProgram) -> Conforman
         report.status = "failed".into();
         return report;
     }
-    report.diagnostics.extend(program.diagnostics.clone());
+    let selected: BTreeSet<_> = targets
+        .iter()
+        .flat_map(|target| &target.operations)
+        .flat_map(|declared| {
+            program.operations.values().filter(move |operation| {
+                operation.source.language == "java" && operation.source.symbol == declared.binding
+            })
+        })
+        .flat_map(|operation| reachable(&operation.source.id, program))
+        .map(|operation| operation.source.id.clone())
+        .collect();
+    report
+        .diagnostics
+        .extend(crate::derived::scoped_diagnostics(program, &selected));
     let Some(inventory) = &program.inventory else {
         report.status = if report.diagnostics.is_empty() {
             "incomplete"
@@ -1068,7 +1088,7 @@ pub fn conform(targets: &[TargetFeature], program: &DerivedProgram) -> Conforman
         report.diagnostics.push(diagnostic("TARGET_INVENTORY", "Analyzer does not provide target coverage/resource inventory; rebuild the Java analyzer", &targets[0].location));
         return report;
     };
-    if inventory.version != 1 {
+    if inventory.version != 2 {
         report.status = if report.diagnostics.is_empty() {
             "incomplete"
         } else {
@@ -1078,7 +1098,7 @@ pub fn conform(targets: &[TargetFeature], program: &DerivedProgram) -> Conforman
         report.diagnostics.push(diagnostic(
             "TARGET_INVENTORY",
             format!(
-                "Unsupported analyzer inventory version {}",
+                "Unsupported analyzer inventory version {}; version 2 with source-member owner metadata is required, rebuild the Java analyzer",
                 inventory.version
             ),
             &targets[0].location,
@@ -1155,7 +1175,10 @@ pub fn conform(targets: &[TargetFeature], program: &DerivedProgram) -> Conforman
             let candidates: Vec<_> = inventory
                 .resources
                 .iter()
-                .filter(|r| r.table == table || r.resource == resource.name)
+                .filter(|r| {
+                    tables_may_alias(&r.table.trim().to_ascii_lowercase(), &table)
+                        || r.resource == resource.name
+                })
                 .collect();
             if candidates.is_empty() {
                 report.diagnostics.push(diagnostic(
@@ -1165,7 +1188,9 @@ pub fn conform(targets: &[TargetFeature], program: &DerivedProgram) -> Conforman
                 ));
             }
             for actual in candidates {
-                if actual.table != table || actual.resource != resource.name {
+                if actual.table.trim().to_ascii_lowercase() != table
+                    || actual.resource != resource.name
+                {
                     report.diagnostics.push(diagnostic(
                         "TARGET_RESOURCE_MAPPING",
                         format!(
@@ -1288,34 +1313,47 @@ pub fn conform(targets: &[TargetFeature], program: &DerivedProgram) -> Conforman
                 declared.dependencies.iter().map(String::as_str).collect();
             allowed.extend(own_boundaries);
             for reached in reachable(&actual.source.id, program) {
-                let Some(owner) = source_owner(&reached.source.symbol) else {
+                let mut references: Vec<_> = reached
+                    .source
+                    .calls
+                    .iter()
+                    .filter_map(|call| {
+                        call.source_owner
+                            .as_deref()
+                            .map(|owner| (owner, call.expression.as_str()))
+                    })
+                    .collect();
+                if let Some(owner) = source_owner(&reached.source.symbol) {
+                    references.push((owner, &reached.source.symbol));
+                } else {
                     incomplete = true;
                     report.diagnostics.push(diagnostic(
                         "TARGET_ANALYSIS_GAP",
                         format!("Cannot identify source owner for {}", reached.source.symbol),
                         at,
                     ));
-                    continue;
-                };
-                let matches = matching(&matchers, owner);
-                if matches.len() != 1 {
-                    report.diagnostics.push(diagnostic(
-                        "TARGET_BOUNDARY_COVERAGE",
-                        format!(
-                            "{} reaches {owner}, which must match exactly one target boundary",
-                            declared.binding
-                        ),
-                        at,
-                    ));
-                } else if !allowed.contains(matches[0]) {
-                    report.diagnostics.push(diagnostic(
-                        "TARGET_DEPENDENCY_EXCEEDED",
-                        format!(
-                            "{} reaches {} in unpermitted boundary {}",
-                            declared.binding, reached.source.symbol, matches[0]
-                        ),
-                        at,
-                    ));
+                }
+                for (owner, reference) in references {
+                    let matches = matching(&matchers, owner);
+                    if matches.len() != 1 {
+                        report.diagnostics.push(diagnostic(
+                            "TARGET_BOUNDARY_COVERAGE",
+                            format!(
+                                "{} reaches {owner}, which must match exactly one target boundary",
+                                declared.binding
+                            ),
+                            at,
+                        ));
+                    } else if !allowed.contains(matches[0]) {
+                        report.diagnostics.push(diagnostic(
+                            "TARGET_DEPENDENCY_EXCEEDED",
+                            format!(
+                                "{} reaches {reference} on {owner} in unpermitted boundary {}",
+                                declared.binding, matches[0]
+                            ),
+                            at,
+                        ));
+                    }
                 }
             }
             for policy in &declared.policies {
@@ -1454,13 +1492,14 @@ target feature Checkout.Discounts {
             line: 1,
             column: 1,
             target: Some(id.into()),
+            source_owner: None,
             resolution: CallResolution::Resolved,
             reason: "source method".into(),
         }
     }
     fn inventory(root: &SourceOperation) -> SourceInventory {
         SourceInventory {
-            version: 1,
+            version: 2,
             classes: vec![
                 SourceClass {
                     name: "example.Discounts".into(),
@@ -1505,7 +1544,7 @@ target feature Checkout.Discounts {
         assert!(lint(std::slice::from_ref(&target)).is_empty());
         let program = derived::build(SourceAnalysis {
             inventory: Some(SourceInventory {
-                version: 1,
+                version: 2,
                 classes: vec![],
                 resources: vec![],
             }),
@@ -1654,6 +1693,79 @@ target feature Checkout.Discounts {
     }
 
     #[test]
+    fn target_resource_names_cannot_disguise_qualified_table_aliases() {
+        for (table, alias) in [
+            ("CARTS", "public.carts"),
+            ("public.carts", "carts"),
+            ("public.carts", "PUBLIC.CARTS"),
+        ] {
+            let mut target = target();
+            target.resources[0].table = table.into();
+            target.resources.push(TargetResource {
+                name: "CartWrites".into(),
+                table: alias.into(),
+                location: target.location.clone(),
+            });
+            assert!(lint(&[target])
+                .iter()
+                .any(|d| d.code == "TARGET_RESOURCE_CONFLICT"));
+        }
+
+        let first = target();
+        let source = TARGET
+            .replace("Checkout.Discounts", "Checkout.Other")
+            .replace("example.Discounts", "example.Other")
+            .replace("Carts", "CartWrites")
+            .replace("CARTS", "public.carts");
+        let second = parse("other.target.vitrifi", &source).unwrap();
+        assert!(lint(&[first, second])
+            .iter()
+            .any(|d| d.code == "TARGET_RESOURCE_CONFLICT"));
+    }
+
+    #[test]
+    fn source_only_aliases_cannot_escape_target_table_identity_checks() {
+        for (table, alias) in [("public.carts", "carts"), ("carts", "public.carts")] {
+            let mut target = target();
+            target.resources[0].table = table.into();
+            let mut derived = program(root(), vec![helper()]);
+            let resources = &mut derived.inventory.as_mut().unwrap().resources;
+            resources[0].table = table.into();
+            resources.push(SourceResource {
+                owner: "example.storage.Writer".into(),
+                path: "src/Writer.java".into(),
+                table: alias.into(),
+                resource: "CartWrites".into(),
+            });
+            let report = conform(&[target], &derived);
+            assert_eq!(report.status, "failed");
+            assert!(has(&report, "TARGET_RESOURCE_MAPPING"));
+        }
+    }
+
+    #[test]
+    fn distinct_fully_qualified_schemas_remain_distinct_resources() {
+        let mut target = target();
+        target.resources[0].table = "public.carts".into();
+        target.resources.push(TargetResource {
+            name: "ArchivedCarts".into(),
+            table: "archive.carts".into(),
+            location: target.location.clone(),
+        });
+        let mut derived = program(root(), vec![helper()]);
+        let resources = &mut derived.inventory.as_mut().unwrap().resources;
+        resources[0].table = "public.carts".into();
+        resources.push(SourceResource {
+            owner: "example.storage.Archive".into(),
+            path: "src/Archive.java".into(),
+            table: "archive.carts".into(),
+            resource: "ArchivedCarts".into(),
+        });
+        let report = conform(&[target], &derived);
+        assert_eq!(report.status, "passed", "{:?}", report.diagnostics);
+    }
+
+    #[test]
     fn unknown_reachable_calls_are_incomplete_and_known_violations_still_fail() {
         let mut load = helper();
         load.calls.push(SourceCall {
@@ -1661,6 +1773,7 @@ target feature Checkout.Discounts {
             line: 1,
             column: 1,
             target: None,
+            source_owner: None,
             resolution: CallResolution::Unknown,
             reason: "unsupported dispatch".into(),
         });
@@ -1687,17 +1800,107 @@ target feature Checkout.Discounts {
     }
 
     #[test]
+    fn summarized_record_members_require_transitive_boundary_permission() {
+        for expression in ["new example.records.Value()", "record.value()"] {
+            let mut load = helper();
+            load.calls.push(SourceCall {
+                expression: expression.into(),
+                line: 1,
+                column: 1,
+                target: None,
+                source_owner: Some("example.records.Value".into()),
+                resolution: CallResolution::Intrinsic,
+                reason: "summarized source record member".into(),
+            });
+            let derived = program(root(), vec![load]);
+            let mut target = target();
+            let report = conform(std::slice::from_ref(&target), &derived);
+            assert_eq!(report.status, "failed");
+            assert!(has(&report, "TARGET_BOUNDARY_COVERAGE"));
+
+            target.boundaries.push(TargetBoundary {
+                name: "Records".into(),
+                classes: vec!["example.records.*".into()],
+                location: target.location.clone(),
+            });
+            let report = conform(std::slice::from_ref(&target), &derived);
+            assert_eq!(report.status, "failed");
+            assert!(has(&report, "TARGET_DEPENDENCY_EXCEEDED"));
+
+            target.operations[0].dependencies.push("Records".into());
+            let report = conform(&[target], &derived);
+            assert_eq!(report.status, "passed", "{:?}", report.diagnostics);
+        }
+    }
+
+    #[test]
+    fn external_intrinsics_do_not_require_source_boundary_mapping() {
+        let mut load = helper();
+        load.calls.push(SourceCall {
+            expression: "java.util.List.of()".into(),
+            line: 1,
+            column: 1,
+            target: None,
+            source_owner: None,
+            resolution: CallResolution::Intrinsic,
+            reason: "external modeled intrinsic".into(),
+        });
+        assert_eq!(check(root(), vec![load]).status, "passed");
+    }
+
+    #[test]
+    fn source_policy_diagnostics_follow_selected_operation_ids() {
+        let mut unrelated = helper();
+        unrelated.id = "src/Repository.java::example.storage.Repository.unrelated()".into();
+        unrelated.symbol = "example.storage.Repository.unrelated()".into();
+        unrelated.direct_effects = vec![effect("write")];
+        unrelated.policies = vec![SourcePolicy::Forbid {
+            effect: effect("write"),
+        }];
+        // Both helpers deliberately have the same source path and line.
+        let mut derived = program(root(), vec![helper(), unrelated]);
+        assert!(derived
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "FORBIDDEN_EFFECT"));
+        let report = conform(&[target()], &derived);
+        assert_eq!(report.status, "passed", "{:?}", report.diagnostics);
+
+        derived.diagnostics.push(diagnostic(
+            "JAVA_METADATA",
+            "Global adapter metadata remains invalid",
+            &target().location,
+        ));
+        assert!(has(&conform(&[target()], &derived), "JAVA_METADATA"));
+
+        let mut selected = helper();
+        selected.policies = vec![SourcePolicy::Forbid {
+            effect: effect("read"),
+        }];
+        let report = check(root(), vec![selected]);
+        assert_eq!(report.status, "failed");
+        assert!(has(&report, "FORBIDDEN_EFFECT"));
+    }
+
+    #[test]
     fn old_inventory_and_unmodeled_inherited_api_cannot_pass() {
         let mut derived = program(root(), vec![helper()]);
         derived.inventory = None;
         assert_eq!(conform(&[target()], &derived).status, "incomplete");
+        for version in [1, 3] {
+            derived.inventory = Some(inventory(&root()));
+            derived.inventory.as_mut().unwrap().version = version;
+            let report = conform(&[target()], &derived);
+            assert_eq!(report.status, "incomplete");
+            assert!(has(&report, "TARGET_INVENTORY"));
+        }
         derived.inventory = Some(inventory(&root()));
         derived.inventory.as_mut().unwrap().classes[0]
             .unsupported_api
             .push("Inherited method is not modeled".into());
-        assert_eq!(conform(&[target()], &derived).status, "incomplete");
-        derived.inventory.as_mut().unwrap().version = 2;
-        assert_eq!(conform(&[target()], &derived).status, "incomplete");
+        let report = conform(&[target()], &derived);
+        assert_eq!(report.status, "incomplete");
+        assert!(has(&report, "TARGET_API_GAP"));
     }
 
     #[test]
