@@ -1,6 +1,6 @@
 //! Java source analysis is an explicit compiler invocation, never an application run.
 use crate::{compiler, derived, derived_model::*};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -24,6 +24,22 @@ pub struct Analysis {
     pub revision: String,
     pub inputs: BTreeMap<String, String>,
     pub scope: Vec<String>,
+}
+
+/// Independent target obligations pinned to the evidence session by the CLI.
+/// Conformance must first establish the matching source/runtime annotations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetContext {
+    pub revision: String,
+    pub files: Vec<String>,
+    pub entries: Vec<TargetEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetEntry {
+    pub feature: String,
+    pub method: String,
+    pub policies: Vec<SourcePolicy>,
 }
 
 fn absolute(root: &Path, path: &Path) -> PathBuf {
@@ -74,18 +90,21 @@ fn directory_digest(path: &Path) -> Result<String, String> {
     Ok(compiler::content_digest(&contents))
 }
 
-fn source_paths(root: &Path, options: &Options) -> Result<Vec<String>, String> {
-    let directory = absolute(root, &options.source_root)
-        .canonicalize()
-        .map_err(|_| {
-            format!(
-                "Java source directory {} does not exist; set --source-root",
-                options.source_root.display()
-            )
-        })?;
+fn source_directory(root: &Path, source_root: &Path) -> Result<PathBuf, String> {
+    let directory = absolute(root, source_root).canonicalize().map_err(|_| {
+        format!(
+            "Java source directory {} does not exist; set --source-root",
+            source_root.display()
+        )
+    })?;
     if !directory.starts_with(root) {
         return Err("Java source directory must be inside --root".into());
     }
+    Ok(directory)
+}
+
+fn source_paths_under(root: &Path, source_root: &Path) -> Result<Vec<String>, String> {
+    let directory = source_directory(root, source_root)?;
     let mut paths = Vec::new();
     for path in compiler::repository_files(root)? {
         if path.ends_with(".java") && root.join(&path).starts_with(&directory) {
@@ -97,6 +116,15 @@ fn source_paths(root: &Path, options: &Options) -> Result<Vec<String>, String> {
         return Err("No Java sources found in --source-root".into());
     }
     Ok(paths)
+}
+
+fn source_paths(root: &Path, options: &Options) -> Result<Vec<String>, String> {
+    source_paths_under(root, &options.source_root)
+}
+
+fn source_set_digest(paths: &[String]) -> String {
+    // Encode the list rather than joining paths with a potentially valid filename byte.
+    compiler::hash_bytes(&serde_json::to_vec(paths).unwrap())
 }
 
 pub fn analyze(root: &Path, options: &Options) -> Result<Analysis, String> {
@@ -139,6 +167,18 @@ pub fn analyze(root: &Path, options: &Options) -> Result<Analysis, String> {
     classpath.push(analyzer.clone());
     let classpath = std::env::join_paths(classpath).map_err(|e| e.to_string())?;
     let sources = source_paths(&root, options)?;
+    let source_directory = source_directory(&root, &options.source_root)?;
+    inputs.insert(
+        format!(
+            "java-source-set:{}",
+            compiler::slash(
+                source_directory
+                    .strip_prefix(&root)
+                    .map_err(|e| e.to_string())?
+            )
+        ),
+        source_set_digest(&sources),
+    );
     for path in &sources {
         inputs.insert(
             path.clone(),
@@ -436,6 +476,16 @@ pub fn verify(
     runner: &[String],
     timeout: u64,
 ) -> Result<Value, String> {
+    verify_with_target(root, analysis, runner, timeout, None)
+}
+
+pub fn verify_with_target(
+    root: &Path,
+    analysis: &Analysis,
+    runner: &[String],
+    timeout: u64,
+    target: Option<&TargetContext>,
+) -> Result<Value, String> {
     if runner.is_empty() {
         return Err("Java verification requires an explicit test command after --".into());
     }
@@ -444,6 +494,11 @@ pub fn verify(
     }
     if static_status(analysis) != "passed" {
         return Ok(json!({"status":static_status(analysis),"executed":false,"analysis":analysis}));
+    }
+    if !inputs_current(root, &analysis.inputs) {
+        return Ok(
+            json!({"status":"stale","executed":false,"message":"Source, dependencies, or target changed before verification"}),
+        );
     }
     let workspace_revision = compiler::workspace_digest(root)?;
     let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
@@ -494,7 +549,10 @@ pub fn verify(
         .and_then(|b| serde_json::from_slice(&b).ok());
     let fresh = workspace_revision == compiler::workspace_digest(root)?
         && inputs_current(root, &analysis.inputs);
-    let evidence_gaps = runtime_gaps(analysis, trace_value.as_ref(), &session_id);
+    let mut evidence_gaps = runtime_gaps(analysis, trace_value.as_ref(), &session_id);
+    if let Some(target) = target {
+        evidence_gaps.extend(target_runtime_gaps(target, trace_value.as_ref()));
+    }
     let evidence_valid = evidence_gaps.is_empty();
     let runtime_failed = trace_value.as_ref().is_some_and(|v| {
         v["status"] == "failed" || v["violations"].as_array().is_some_and(|a| !a.is_empty())
@@ -517,9 +575,61 @@ pub fn verify(
         .take(32000)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    let report = json!({"status":status,"fresh":fresh,"revision":analysis.revision,"workspace_revision":workspace_revision,"inputs":analysis.inputs,"command":runner,"exit_code":exit_code,"output":String::from_utf8_lossy(&bytes),"runtime":trace_value,"evidence_gaps":evidence_gaps,"scope":"Evidence for captured synchronous Spring/JDBC test executions. It does not prove unexecuted paths, bypassed data sources, asynchronous work, or external effects."});
+    let report = json!({"status":status,"fresh":fresh,"revision":analysis.revision,"workspace_revision":workspace_revision,"inputs":analysis.inputs,"command":runner,"exit_code":exit_code,"output":String::from_utf8_lossy(&bytes),"runtime":trace_value,"target":target,"evidence_gaps":evidence_gaps,"scope":"Evidence for captured synchronous Spring/JDBC test executions. It does not prove unexecuted paths, bypassed data sources, asynchronous work, or external effects."});
     crate::evidence::save(root, "java-evidence.json", &report)?;
     Ok(report)
+}
+
+fn target_runtime_gaps(target: &TargetContext, report: Option<&Value>) -> Vec<String> {
+    let mut gaps = Vec::new();
+    let invocations = report.and_then(|r| r["invocations"].as_array());
+    let coverage = report.and_then(|r| r["policy_coverage"].as_array());
+    for entry in &target.entries {
+        let matches = |v: &Value| v["feature"] == entry.feature && v["method"] == entry.method;
+        if !invocations.is_some_and(|items| {
+            items
+                .iter()
+                .any(|v| matches(v) && matches!(v["outcome"].as_str(), Some("returned" | "threw")))
+        }) {
+            gaps.push(format!(
+                "Target entry {} has no matching execution evidence",
+                entry.method
+            ));
+        }
+        for policy in &entry.policies {
+            let (kind, effect, needs_error) = match policy {
+                SourcePolicy::Forbid { effect } => ("forbid", effect, false),
+                SourcePolicy::NoEffectOnError { effect } => ("no_effect_on_error", effect, true),
+            };
+            let policy_matches = |v: &Value| {
+                v["kind"] == kind
+                    && v["action"] == effect.action
+                    && v["resource"] == effect.resource
+                    && v["status"] == "passed"
+            };
+            let covered =
+                coverage.is_some_and(|items| items.iter().any(|v| matches(v) && policy_matches(v)));
+            let exercised = invocations.is_some_and(|items| {
+                items.iter().any(|v| {
+                    matches(v)
+                        && (!needs_error || v["outcome"] == "threw")
+                        && v["policies"]
+                            .as_array()
+                            .is_some_and(|ps| ps.iter().any(policy_matches))
+                })
+            });
+            if !covered || !exercised {
+                gaps.push(format!(
+                    "Target policy {kind} {} {} on {} lacks matching {}evidence",
+                    effect.action,
+                    effect.resource,
+                    entry.method,
+                    if needs_error { "error-path " } else { "" }
+                ));
+            }
+        }
+    }
+    gaps
 }
 
 fn runtime_gaps(analysis: &Analysis, report: Option<&Value>, session: &str) -> Vec<String> {
@@ -615,6 +725,10 @@ fn runtime_gaps(analysis: &Analysis, report: Option<&Value>, session: &str) -> V
 
 fn inputs_current(root: &Path, inputs: &BTreeMap<String, String>) -> bool {
     inputs.iter().all(|(key, hash)| {
+        if let Some(source_root) = key.strip_prefix("java-source-set:") {
+            return source_paths_under(root, Path::new(source_root))
+                .is_ok_and(|paths| source_set_digest(&paths) == *hash);
+        }
         if let Some(directory) = key.strip_prefix("directory:") {
             return directory_digest(Path::new(directory)).is_ok_and(|s| s == *hash);
         }
@@ -676,6 +790,7 @@ mod tests {
             program: derived::build(SourceAnalysis {
                 operations: vec![operation],
                 diagnostics: vec![],
+                inventory: None,
             }),
             revision: "revision".into(),
             inputs: BTreeMap::new(),
@@ -689,6 +804,95 @@ mod tests {
             "scenarios":[{"name":"invalid coupon","outcome":"passed"}],
             "invocations":[{"feature":"Checkout","method":"example.Checkout.apply()","scenario":"invalid coupon","outcome":"threw","events":[],"policies":[policy.clone()]}],
             "violations":[],"gaps":[],"policy_coverage":[policy]})
+    }
+
+    fn source_inputs(root: &Path) -> BTreeMap<String, String> {
+        let paths = source_paths_under(root, Path::new("src/main/java")).unwrap();
+        let mut inputs = BTreeMap::from([(
+            "java-source-set:src/main/java".into(),
+            source_set_digest(&paths),
+        )]);
+        for path in paths {
+            inputs.insert(
+                path.clone(),
+                compiler::hash_bytes(&fs::read(root.join(path)).unwrap()),
+            );
+        }
+        inputs
+    }
+
+    #[test]
+    fn source_inventory_tracks_additions_and_removals_only_within_the_selected_source_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src/main/java")).unwrap();
+        fs::write(root.join("src/main/java/App.java"), "class App {}\n").unwrap();
+        let inputs = source_inputs(&root);
+        assert!(inputs_current(&root, &inputs));
+
+        fs::create_dir_all(root.join("src/test/java")).unwrap();
+        fs::write(root.join("src/test/java/Test.java"), "class Test {}\n").unwrap();
+        fs::write(root.join("src/main/java/notes.txt"), "notes\n").unwrap();
+        assert!(inputs_current(&root, &inputs));
+
+        fs::write(root.join("src/main/java/Added.java"), "class Added {}\n").unwrap();
+        assert!(!inputs_current(&root, &inputs));
+        fs::remove_file(root.join("src/main/java/Added.java")).unwrap();
+        assert!(inputs_current(&root, &inputs));
+        fs::remove_file(root.join("src/main/java/App.java")).unwrap();
+        assert!(!inputs_current(&root, &inputs));
+    }
+
+    #[test]
+    fn existing_inputs_without_source_inventory_remain_readable() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::write(root.join("App.java"), "class App {}\n").unwrap();
+        let inputs = BTreeMap::from([("App.java".into(), compiler::hash_bytes(b"class App {}\n"))]);
+        assert!(inputs_current(&root, &inputs));
+        fs::write(root.join("App.java"), "class App { int changed; }\n").unwrap();
+        assert!(!inputs_current(&root, &inputs));
+    }
+
+    #[test]
+    fn source_added_after_analysis_blocks_verification_before_the_runner_starts() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src/main/java")).unwrap();
+        fs::write(root.join("src/main/java/App.java"), "class App {}\n").unwrap();
+        let mut analysis = analysis();
+        analysis.inputs = source_inputs(&root);
+        fs::write(root.join("src/main/java/Added.java"), "class Added {}\n").unwrap();
+
+        let result = verify_with_target(
+            &root,
+            &analysis,
+            &["this-command-must-not-be-started".into()],
+            1,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result["status"], "stale");
+        assert_eq!(result["executed"], false);
+    }
+
+    #[test]
+    fn evidence_lookup_rechecks_the_saved_source_inventory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src/main/java")).unwrap();
+        fs::write(root.join("src/main/java/App.java"), "class App {}\n").unwrap();
+        let inputs = source_inputs(&root);
+        fs::write(root.join("src/main/java/Added.java"), "class Added {}\n").unwrap();
+        // Even a workspace snapshot captured after an insertion must not make
+        // evidence for the earlier source selection appear current.
+        let report = json!({"status":"passed","inputs":inputs,
+            "workspace_revision":compiler::workspace_digest(&root).unwrap()});
+        crate::evidence::save(&root, "java-evidence.json", &report).unwrap();
+        let result = evidence_status(&root).unwrap();
+        assert_eq!(result["status"], "stale");
+        assert_eq!(result["recorded_status"], "passed");
+        assert_eq!(result["fresh"], false);
     }
 
     #[test]
@@ -719,5 +923,46 @@ mod tests {
         let mut value = report();
         value["complete"] = json!(false);
         assert!(!runtime_gaps(&analysis, Some(&value), "session").is_empty());
+    }
+
+    #[test]
+    fn independent_target_obligations_require_matching_error_executions() {
+        let context = TargetContext {
+            revision: "target-digest".into(),
+            files: vec!["Checkout.target.vitrifi".into()],
+            entries: vec![TargetEntry {
+                feature: "Checkout".into(),
+                method: "example.Checkout.apply()".into(),
+                policies: vec![SourcePolicy::NoEffectOnError {
+                    effect: ResourceEffect {
+                        action: "write".into(),
+                        resource: "Carts".into(),
+                    },
+                }],
+            }],
+        };
+        assert!(target_runtime_gaps(&context, Some(&report())).is_empty());
+        let mut success_only = report();
+        success_only["invocations"][0]["outcome"] = json!("returned");
+        assert!(!target_runtime_gaps(&context, Some(&success_only)).is_empty());
+        let mut missing_policy = report();
+        missing_policy["policy_coverage"] = json!([]);
+        missing_policy["invocations"][0]["policies"] = json!([]);
+        assert!(!target_runtime_gaps(&context, Some(&missing_policy)).is_empty());
+    }
+
+    #[test]
+    fn every_target_entry_needs_an_invocation_even_without_an_error_policy() {
+        let context = TargetContext {
+            revision: "target".into(),
+            files: vec![],
+            entries: vec![TargetEntry {
+                feature: "Checkout".into(),
+                method: "example.Checkout.preview()".into(),
+                policies: vec![],
+            }],
+        };
+        assert!(!target_runtime_gaps(&context, Some(&report())).is_empty());
+        assert!(!target_runtime_gaps(&context, None).is_empty());
     }
 }

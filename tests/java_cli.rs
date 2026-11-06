@@ -58,6 +58,7 @@ impl Fixture {
         let data = serde_json::to_string(&SourceAnalysis {
             operations,
             diagnostics: vec![],
+            inventory: None,
         })
         .unwrap();
         // Single-quote shell escaping keeps all model content literal, including

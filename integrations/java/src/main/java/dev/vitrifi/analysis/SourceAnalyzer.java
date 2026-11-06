@@ -50,6 +50,7 @@ public final class SourceAnalyzer {
     private final List<BeanCandidate> beans = new ArrayList<>();
     private final Map<VariableElement, Injection> injections = new HashMap<>();
     private final Map<String, String> resourceTables = new TreeMap<>();
+    private final List<Map<String, Object>> resourceInventory = new ArrayList<>();
     private final Set<String> conflictedTables = new HashSet<>();
     private final Map<String, String> featurePurposes = new HashMap<>();
 
@@ -108,7 +109,49 @@ public final class SourceAnalyzer {
             operation.data.put("direct_effects", operation.effects.values().stream().toList());
             serialized.add(operation.data);
         }
-        return map("operations", serialized, "diagnostics", diagnostics);
+        return map("operations", serialized, "diagnostics", diagnostics,
+                "inventory", map("version", 1, "classes", classInventory(), "resources", resourceInventory.stream()
+                        .sorted(Comparator.comparing(r -> r.get("owner").toString())).toList()));
+    }
+
+    private List<Map<String, Object>> classInventory() {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (ClassInfo info : classes.values()) {
+            Set<String> publicMethods = new TreeSet<>();
+            Set<String> unsupported = new TreeSet<>();
+            if (!info.type.getKind().isClass() || info.type.getModifiers().contains(Modifier.ABSTRACT)) {
+                unsupported.add("Covered type is not a concrete class: " + info.type.getQualifiedName());
+            }
+            if (!info.type.getTypeParameters().isEmpty()) {
+                unsupported.add("Covered class has unmodeled generic type parameter bounds: " + info.type.getQualifiedName());
+            }
+            for (Element member : info.type.getEnclosedElements()) {
+                if (!(member instanceof ExecutableElement method) || method.getKind() != ElementKind.METHOD
+                        || !method.getModifiers().contains(Modifier.PUBLIC)) continue;
+                publicMethods.add(qualifiedMethod(method));
+                if (!method.getTypeParameters().isEmpty()) {
+                    unsupported.add("Public method has unmodeled generic type parameter bounds: " + qualifiedMethod(method));
+                }
+                if (method.getModifiers().contains(Modifier.NATIVE)) {
+                    unsupported.add("Public native method has no analyzable Java body: " + qualifiedMethod(method));
+                }
+                if (!methods.containsKey(method)) {
+                    unsupported.add("Public method has no analyzed source declaration: " + qualifiedMethod(method));
+                }
+            }
+            for (Element member : elements.getAllMembers(info.type)) {
+                if (!(member instanceof ExecutableElement method) || method.getKind() != ElementKind.METHOD
+                        || !method.getModifiers().contains(Modifier.PUBLIC)) continue;
+                TypeElement owner = (TypeElement) method.getEnclosingElement();
+                if (!owner.equals(info.type) && !owner.getQualifiedName().contentEquals("java.lang.Object")) {
+                    unsupported.add("Inherited public method is outside covered declared API: " + qualifiedMethod(method));
+                }
+            }
+            result.add(map("name", info.type.getQualifiedName().toString(), "path", location(info.path).get("path"),
+                    "public_methods", List.copyOf(publicMethods), "unsupported_api", List.copyOf(unsupported)));
+        }
+        result.sort(Comparator.comparing(c -> c.get("name").toString()));
+        return result;
     }
 
     private void register(CompilationUnitTree unit) {
@@ -130,10 +173,13 @@ public final class SourceAnalyzer {
                     if (table != null) {
                         String resource = stringValue(table, "value");
                         String name = stringValue(table, "table");
+                        resourceInventory.add(map("owner", type.getQualifiedName().toString(),
+                                "path", location(getCurrentPath()).get("path"),
+                                "table", SqlClassifier.normalizeTable(name), "resource", resource));
                         if (!NAME.matcher(resource).matches() || !TABLE.matcher(name).matches()) {
                             diagnostic("JAVA_METADATA", "ResourceTable requires a resource name and a simple SQL table name", getCurrentPath());
                         } else {
-                            name = name.toLowerCase(Locale.ROOT);
+                            name = SqlClassifier.normalizeTable(name);
                             String previous = resourceTables.putIfAbsent(name, resource);
                             if (previous != null && !previous.equals(resource)) {
                                 conflictedTables.add(name);
@@ -311,6 +357,9 @@ public final class SourceAnalyzer {
     private void scan(Operation operation) {
         if (operation.tree != null && operation.tree.getBody() != null) {
             new Calls(operation).scan(new TreePath(operation.path, operation.tree.getBody()), null);
+        } else if (operation.method != null && operation.method.getKind() == ElementKind.METHOD) {
+            call(operation, operation.path, "unmodeled method body", null, "unknown",
+                    "native or abstract method declaration has no Java implementation body to analyze");
         }
     }
 

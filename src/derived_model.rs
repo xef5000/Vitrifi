@@ -65,10 +65,78 @@ pub struct SourceOperation {
     pub policies: Vec<SourcePolicy>,
 }
 
+/// Adapter inventory independent of feature markers and reachable call graphs.
+/// Conformance requires a supported inventory version rather than assuming that
+/// operations omitted by an older adapter do not exist.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceInventory {
+    pub version: u32,
+    pub classes: Vec<SourceClass>,
+    pub resources: Vec<SourceResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceClass {
+    pub name: String,
+    pub path: String,
+    /// Declared public method symbols, including static methods, excluding constructors.
+    pub public_methods: Vec<String>,
+    /// Public inherited or generated API this adapter cannot completely bind.
+    pub unsupported_api: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourceResource {
+    pub owner: String,
+    pub path: String,
+    /// SQL classifier's normalized table identity, independent of the friendly name.
+    pub table: String,
+    pub resource: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SourceAnalysis {
     pub operations: Vec<SourceOperation>,
     pub diagnostics: Vec<Diagnostic>,
+    #[serde(default)]
+    pub inventory: Option<SourceInventory>,
 }
 
 pub type SourceFiles = BTreeMap<String, String>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_adapter_results_remain_readable_without_claiming_inventory_coverage() {
+        let analysis: SourceAnalysis =
+            serde_json::from_str(r#"{"operations":[],"diagnostics":[]}"#).unwrap();
+        assert!(analysis.inventory.is_none());
+        assert!(crate::derived::build(analysis).inventory.is_none());
+    }
+
+    #[test]
+    fn derived_program_retains_independent_public_api_and_resource_inventory() {
+        let inventory = SourceInventory {
+            version: 1,
+            classes: vec![SourceClass {
+                name: "demo.App".into(),
+                path: "src/App.java".into(),
+                public_methods: vec!["demo.App.unmarked()".into()],
+                unsupported_api: vec![],
+            }],
+            resources: vec![SourceResource {
+                owner: "demo.Storage".into(),
+                path: "src/Storage.java".into(),
+                table: "shop.carts".into(),
+                resource: "Carts".into(),
+            }],
+        };
+        let program = crate::derived::build(SourceAnalysis {
+            inventory: Some(inventory.clone()),
+            ..SourceAnalysis::default()
+        });
+        assert_eq!(program.inventory, Some(inventory));
+    }
+}

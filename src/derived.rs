@@ -65,6 +65,8 @@ pub struct DerivedProgram {
     pub features: BTreeMap<String, DerivedFeature>,
     pub diagnostics: Vec<Diagnostic>,
     pub policy_results: Vec<PolicyResult>,
+    #[serde(default)]
+    pub inventory: Option<SourceInventory>,
 }
 
 fn at(source: &SourceOperation) -> Location {
@@ -338,6 +340,7 @@ pub fn build(mut analysis: SourceAnalysis) -> DerivedProgram {
         features,
         diagnostics,
         policy_results,
+        inventory: analysis.inventory,
     }
 }
 
@@ -809,6 +812,7 @@ mod tests {
         build(SourceAnalysis {
             operations,
             diagnostics: vec![],
+            inventory: None,
         })
     }
     fn feature_root(id: &str) -> SourceOperation {

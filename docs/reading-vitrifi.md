@@ -2,6 +2,8 @@
 
 This guide explains the original authored feature language. For the new workflow that generates feature files from Java source and checks real Spring/JDBC behavior, start with [Generated features from Java and Spring](java-spring.md). The declaration vocabulary below also helps when reading generated files, but contributors edit the Java source and annotations instead of generated output.
 
+For independent design constraints that the implementation must satisfy, read [Architecture targets](targets.md). It explains the `.target.vitrifi` syntax, how to follow its public contracts and permitted effects, and what conformance and execution evidence establish.
+
 A `.vitrifi` file is a map of a feature: what it does, the values it accepts and returns, the state it touches, the behavior it promises, and the implementation behind it. The application still runs its Python, Ruby, JavaScript, TypeScript, or Java code. Vitrifi compiles the map and checks its relationships against each other and selected facts from that code.
 
 Read this guide beside [the checkout feature](../examples/checkout/discounts.vitrifi). It explains the language from a reader's perspective, then shows how to write your own feature. Use the [syntax reference](language.md) for every field and its exact rules, and [compiler architecture](architecture.md) for implementation details. These docs describe the current prototype; [idea.md](../idea.md) is an exploration of broader possibilities.

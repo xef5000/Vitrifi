@@ -2,7 +2,13 @@
   "Feature": {
     "prefix": "feature",
     "description": "Declare a feature beside its implementation",
-    "body": ["feature ${1:Checkout.Discounts} {", "  purpose \"${2:Describe this capability.}\";", "", "  $0", "}"]
+    "body": [
+      "feature ${1:Checkout.Discounts} {",
+      "  purpose \"${2:Describe this capability.}\";",
+      "",
+      "  $0",
+      "}"
+    ]
   },
   "Import feature": {
     "prefix": "use",
@@ -12,7 +18,13 @@
   "Operation": {
     "prefix": "operation",
     "description": "Declare a typed operation and its implementation binding",
-    "body": ["export operation ${1:apply}(${2:input}: ${3:String}) -> ${4:Unit} {", "  bind ${5|python,ruby,javascript,typescript,java|} \"${6:./implementation.py}\" symbol \"${7:apply}\";", "  effects [];", "  $0", "}"]
+    "body": [
+      "export operation ${1:apply}(${2:input}: ${3:String}) -> ${4:Unit} {",
+      "  bind ${5|python,ruby,javascript,typescript,java|} \"${6:./implementation.py}\" symbol \"${7:apply}\";",
+      "  effects [];",
+      "  $0",
+      "}"
+    ]
   },
   "Requirement": {
     "prefix": "requirement",
@@ -27,6 +39,49 @@
   "Behavioral check": {
     "prefix": "check",
     "description": "Link an explicit verification command to requirements",
-    "body": ["check ${1:Behavior} {", "  run [\"${2:python3}\", \"${3:-m}\", \"${4:unittest}\"];", "  cwd \"${5:.}\";", "  covers [${6:RejectNoWrite}];", "  timeout ${7:30};", "}"]
+    "body": [
+      "check ${1:Behavior} {",
+      "  run [\"${2:python3}\", \"${3:-m}\", \"${4:unittest}\"];",
+      "  cwd \"${5:.}\";",
+      "  covers [${6:RejectNoWrite}];",
+      "  timeout ${7:30};",
+      "}"
+    ]
+  },
+  "Target feature": {
+    "prefix": [
+      "target",
+      "target-feature"
+    ],
+    "description": "Author a Java feature target independently of the implementation",
+    "body": [
+      "target feature ${1:Checkout.Discounts} {",
+      "  purpose \"${2:Describe the capability and its constraints.}\";",
+      "  cover java \"${3:example.DiscountService}\";",
+      "  resource ${4:Carts} table \"${5:carts}\";",
+      "  boundary ${6:Workflow} java [\"$3\"];",
+      "  boundary ${7:Storage} java [\"${8:example.JdbcCartRepository}\"];",
+      "",
+      "  operation ${9:preview}(${10:cartId}: \"java.lang.String\") -> \"${11:example.Cart}\" {",
+      "    bind java \"$3.$9(java.lang.String)\";",
+      "    effects [read $4];",
+      "    dependencies [$7];",
+      "    forbid [write $4];",
+      "  }",
+      "  $0",
+      "}"
+    ]
+  },
+  "Target operation": {
+    "prefix": "target-operation",
+    "description": "Declare exact Java types and permitted effects/dependencies in a target",
+    "body": [
+      "operation ${1:preview}(${2:input}: \"${3:java.lang.String}\") -> \"${4:example.Result}\" {",
+      "  bind java \"${5:example.Service}.$1($3)\";",
+      "  effects [${6:read Carts}];",
+      "  dependencies [${7:Storage}];",
+      "  $0",
+      "}"
+    ]
   }
 }

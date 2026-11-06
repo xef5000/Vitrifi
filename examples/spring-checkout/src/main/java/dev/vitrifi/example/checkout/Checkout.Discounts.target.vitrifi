@@ -1,0 +1,30 @@
+// Authored architectural target. Generation never rewrites this file.
+target feature Checkout.Discounts {
+  purpose "Apply one valid coupon to the owner's cart without writes on rejection";
+
+  // Closed public API coverage remains even if @Feature is removed.
+  cover java "dev.vitrifi.example.checkout.DiscountService";
+  resource Carts table "carts";
+
+  boundary Workflow java [
+    "dev.vitrifi.example.checkout.DiscountService",
+    "dev.vitrifi.example.checkout.CouponRejected",
+    "dev.vitrifi.example.checkout.Cart",
+    "dev.vitrifi.example.checkout.Receipt"
+  ];
+  boundary Storage java ["dev.vitrifi.example.checkout.JdbcCartRepository"];
+
+  operation applyCoupon(actorId: "java.lang.String", cartId: "java.lang.String", code: "java.lang.String") -> "dev.vitrifi.example.checkout.Receipt" {
+    bind java "dev.vitrifi.example.checkout.DiscountService.applyCoupon(java.lang.String,java.lang.String,java.lang.String)";
+    effects [read Carts, write Carts];
+    dependencies [Storage];
+    no_effect_on_error [write Carts];
+  }
+
+  operation preview(cartId: "java.lang.String") -> "dev.vitrifi.example.checkout.Cart" {
+    bind java "dev.vitrifi.example.checkout.DiscountService.preview(java.lang.String)";
+    effects [read Carts];
+    dependencies [Storage];
+    forbid [write Carts];
+  }
+}

@@ -1527,6 +1527,8 @@ Research directions include:
 
 Names raised as possible starting points include Eiffel, Koka, Unison, ArchUnit, and the Language Server Protocol.
 
+Backus's [FP](https://www.hinkali.com/Education/BackusTuringLecture1977.pdf) and the subsequent [FL project](https://theory.stanford.edu/~aiken/publications/trs/FLProject.pdf) are also useful research leads for small combining forms, program algebra, and the semantics of effects. The [issue #5 exploration](docs/architecture-driven-development.md) relates these ideas to authored architecture targets and records the assumptions needed before claiming equivalence.
+
 These are research leads, not a claim that any one of them implements the proposed system.
 
 The possible contribution is likely to be in the combination:

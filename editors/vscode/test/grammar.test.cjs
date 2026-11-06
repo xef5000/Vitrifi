@@ -118,6 +118,83 @@ test('nested generics and comments between signature tokens preserve parameter a
   assert.equal(document.stack.depth, 1);
 });
 
+test('authored targets distinguish coverage, native types, resource mappings, dependencies and policies', () => {
+  const document = tokenize(`target feature Checkout.Discounts {
+  purpose "A read-only preview.";
+  cover java "example.DiscountService";
+  resource Carts table "carts";
+  boundary Workflow java ["example.DiscountService"];
+  boundary Storage java ["example.JdbcCartRepository"];
+  operation preview(cartId: "java.lang.String", amounts: "java.util.Map<java.lang.String, java.lang.Long>") -> "example.Cart" {
+    bind java "example.DiscountService.preview(java.lang.String,java.util.Map)";
+    effects [read Carts];
+    dependencies [Storage];
+    forbid [write Carts];
+    no_effect_on_error [write Carts];
+  }
+  resource Later table "later";
+}`);
+  has(document, 'target feature', 'target', 'storage.modifier.target.vitrifi');
+  has(document, 'target feature', 'feature', 'storage.type.feature.vitrifi');
+  has(document, 'target feature', 'Checkout', 'entity.name.namespace.vitrifi');
+  has(document, 'cover java', 'cover', 'keyword.control.coverage.vitrifi');
+  has(document, 'cover java', 'java', 'support.constant.language.vitrifi');
+  has(document, 'cover java', 'example.DiscountService', 'string.quoted.double.vitrifi');
+  has(document, 'resource Carts', 'Carts', 'variable.other.readwrite.resource.vitrifi');
+  has(document, 'resource Carts', 'table', 'keyword.other.resource-mapping.vitrifi');
+  has(document, 'boundary Workflow', 'Workflow', 'entity.name.type.class.boundary.vitrifi');
+  has(document, 'boundary Workflow', 'java', 'support.constant.language.vitrifi');
+  has(document, 'operation preview', 'cartId', 'variable.parameter.vitrifi');
+  has(document, 'operation preview', 'java.lang.String', 'string.quoted.double.vitrifi');
+  has(document, 'operation preview', 'java.lang.Long', 'string.quoted.double.vitrifi');
+  has(document, 'operation preview', 'example.Cart', 'meta.return-type.vitrifi');
+  has(document, 'operation preview', 'example.Cart', 'string.quoted.double.vitrifi');
+  lacks(document, 'operation preview', 'java.lang.Long', 'variable.parameter.');
+  has(document, 'bind java', 'java', 'support.constant.language.vitrifi');
+  has(document, 'bind java', 'example.DiscountService.preview', 'string.quoted.double.vitrifi');
+  has(document, 'dependencies [', 'dependencies', 'keyword.control.relationship.vitrifi');
+  has(document, 'dependencies [', 'Storage', 'entity.name.type.class.boundary.vitrifi');
+  has(document, 'forbid [', 'forbid', 'keyword.control.policy.vitrifi');
+  has(document, 'forbid [', 'write', 'keyword.operator.effect.vitrifi');
+  has(document, 'forbid [', 'Carts', 'variable.other.readwrite.resource.vitrifi');
+  has(document, 'no_effect_on_error [', 'no_effect_on_error', 'keyword.control.policy.vitrifi');
+  has(document, 'resource Later', 'Later', 'variable.other.readwrite.resource.vitrifi');
+  assert.equal(document.stack.depth, 1);
+});
+
+test('target keywords remain identifiers and comments do not break native declaration context', () => {
+  const document = tokenize(`target /* mode */ feature target {
+  cover /* adapter */ java "example.Service";
+  resource table /* mapping */ table "records";
+  boundary java /* adapter */ java ["example.Service"];
+  boundary dependencies java ["example.Storage"];
+  operation forbid(
+    dependencies /* parameter */ : "java.util.List<java.lang.String>",
+    cover: "int"
+  ) -> /* result */ "long" {
+    bind java "example.Service.forbid(java.util.List,int)";
+    effects [read table];
+    dependencies [dependencies];
+    forbid [write table];
+  }
+}`);
+  has(document, 'feature target', 'target', 'entity.name.namespace.vitrifi', 1);
+  has(document, 'cover /*', 'java', 'support.constant.language.vitrifi');
+  has(document, 'resource table', 'table', 'variable.other.readwrite.resource.vitrifi');
+  has(document, 'resource table', 'table', 'keyword.other.resource-mapping.vitrifi', 1);
+  has(document, 'boundary java', 'java', 'entity.name.type.class.boundary.vitrifi');
+  has(document, 'boundary java', 'java', 'support.constant.language.vitrifi', 1);
+  has(document, 'boundary dependencies', 'dependencies', 'entity.name.type.class.boundary.vitrifi');
+  has(document, 'operation forbid', 'forbid', 'entity.name.function.vitrifi');
+  has(document, 'dependencies /*', 'dependencies', 'variable.parameter.vitrifi');
+  has(document, 'cover: "int"', 'int', 'string.quoted.double.vitrifi');
+  has(document, ') -> /* result */', 'long', 'string.quoted.double.vitrifi');
+  has(document, 'dependencies [', 'dependencies', 'entity.name.type.class.boundary.vitrifi', 1);
+  lacks(document, 'dependencies [', 'dependencies', 'keyword.', 1);
+  has(document, 'forbid [', 'table', 'variable.other.readwrite.resource.vitrifi');
+  assert.equal(document.stack.depth, 1);
+});
+
 test('keyword spellings remain identifiers in declaration, parameter and relationship contexts', () => {
   const document = tokenize(`use "./other.vitrifi" as as;
 feature feature {
@@ -188,6 +265,7 @@ test('all real feature modules tokenize completely without leaked declaration sc
     'examples/checkout/storage/cart.vitrifi',
     'examples/checkout/audit/discount.vitrifi',
     'examples/spring-checkout/src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.vitrifi',
+    'examples/spring-checkout/src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.target.vitrifi',
   ]) {
     const source = fs.readFileSync(path.join(root, relative), 'utf8');
     const document = tokenize(source);
