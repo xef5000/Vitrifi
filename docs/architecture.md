@@ -1,5 +1,7 @@
 # Compiler architecture
 
+Vitrifi 0.3 adds an implementation-derived pipeline: `javac` attribution and supported Spring wiring → source facts → transitive effects and independent policies → generated feature files. Explicit Spring/JDBC scenario runs supply separate runtime evidence. See the [Java/Spring guide](java-spring.md) for that workflow and its supported scope. The description below documents the original authored-language pipeline, which remains available for compatibility.
+
 For an introduction to the language itself, start with [Reading and writing Vitrifi](reading-vitrifi.md) and the [syntax reference](language.md). This document describes how the compiler implements those concepts.
 
 Vitrifi has two distinct languages: `.vitrifi` for architecture, and the host language for implementation. The compiler is a Rust program. It links the two through explicit bindings while keeping authored claims, extracted facts, and test evidence distinguishable.

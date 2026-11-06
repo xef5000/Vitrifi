@@ -183,8 +183,13 @@ test('JSON string escapes distinguish valid and invalid escapes and do not bleed
 
 test('all real feature modules tokenize completely without leaked declaration scopes', () => {
   const root = path.resolve(extension, '../..');
-  for (const relative of ['discounts.vitrifi', 'storage/cart.vitrifi', 'audit/discount.vitrifi']) {
-    const source = fs.readFileSync(path.join(root, 'examples/checkout', relative), 'utf8');
+  for (const relative of [
+    'examples/checkout/discounts.vitrifi',
+    'examples/checkout/storage/cart.vitrifi',
+    'examples/checkout/audit/discount.vitrifi',
+    'examples/spring-checkout/src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.vitrifi',
+  ]) {
+    const source = fs.readFileSync(path.join(root, relative), 'utf8');
     const document = tokenize(source);
     assert.equal(document.stack.depth, 1, `${relative} left an open grammar region`);
     const invalid = document.lines.flatMap(line => line.tokens.filter(token => token.scopes.some(scope => scope.startsWith('invalid.'))));

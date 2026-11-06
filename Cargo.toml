@@ -1,6 +1,6 @@
 [package]
 name = "vitrifi"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A compiled architecture language alongside your implementation"
 
@@ -17,6 +17,6 @@ tree-sitter-ruby = "0.23"
 tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-java = "0.23"
+tempfile = "3"
 
 [dev-dependencies]
-tempfile = "3"

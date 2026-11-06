@@ -1,6 +1,9 @@
 pub mod compiler;
+pub mod derived;
+pub mod derived_model;
 pub mod evidence;
 pub mod host;
+pub mod java;
 pub mod model;
 pub mod parser;
 pub mod review;

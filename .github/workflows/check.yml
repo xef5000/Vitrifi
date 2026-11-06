@@ -1,0 +1,45 @@
+name: Check implementation and generated features
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - name: Prepare Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+      - name: Check Rust
+        run: |
+          cargo +stable fmt --all --check
+          cargo +stable test --locked
+          cargo +stable build --locked
+      - name: Check Java and Spring runtime
+        run: mvn --batch-mode --no-transfer-progress install
+      - name: Check generated feature freshness
+        run: ./target/debug/vitrifi generate --check --root examples/spring-checkout
+      - name: Exercise implementation mutations
+        run: python3 scripts/test-java-workflow.py
+      - name: Check original checkout behavior
+        run: ./target/debug/vitrifi verify --root examples/checkout
+      - name: Check syntax highlighting
+        working-directory: editors/vscode
+        run: |
+          npm ci
+          npm test

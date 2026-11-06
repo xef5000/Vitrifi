@@ -1,14 +1,38 @@
 # Vitrifi
 
-**A compiled architecture language that lives beside the implementation.**
+**A generated architecture view, checked against the implementation.**
 
-A `.vitrifi` file describes one feature: its public operations, requirements, owned resources, effects, and relationships to other features. It imports other feature files by name. Reviewers can read the architectural change in the same pull request as the implementation change.
+Vitrifi 0.3 generates feature-local `.vitrifi` files from Java source and supported Spring wiring. Small annotations declare feature identity, resource names, and policies; the compiler derives signatures, dependencies, and recognized SQL effects. Reviewers can inspect the architectural consequences in the same PR as the implementation change.
 
-The compiler is written in Rust. It checks the feature language, links declarations to Python, Ruby, JavaScript, TypeScript, and Java source, and emits diagnostics with source locations. There is no central feature manifest and no web server required for authoring, checking, or review.
+The Rust core combines a `javac` analysis adapter with explicit Spring/JDBC runtime verification. Unknown dependencies remain visible and prevent a complete check. Generated facts cannot grant themselves permission to violate an authored policy.
+
+## Java/Spring: generate and verify
+
+With JDK 21+, Maven, and Rust installed, run from this repository:
+
+```sh
+cargo build
+mvn install
+mvn -f examples/spring-checkout/pom.xml generate-resources
+./target/debug/vitrifi generate --root examples/spring-checkout
+./target/debug/vitrifi check --java --root examples/spring-checkout
+./target/debug/vitrifi verify --java --root examples/spring-checkout -- mvn test
+./target/debug/vitrifi review --java --root examples/spring-checkout --base origin/main
+```
+
+The second Maven command prepares the standalone test classpath before Vitrifi fingerprints it. A dependency or classpath change during verification invalidates the evidence.
+
+The [Spring checkout example](examples/spring-checkout/README.md) uses a real service, interface-injected repository, `JdbcTemplate`, and H2 database. `@Forbid` rejects a reachable forbidden effect; `@NoEffectOnError` checks actual JDBC attempts on exercised error paths. Changing the host implementation is enough to change the generated architectural model.
+
+Start with the [Java/Spring guide](docs/java-spring.md) for annotations, generated-file review, test evidence, supported patterns, and limits. The generated view remains a file beside the feature; no web server or global authored manifest is required.
+
+## Earlier authored workflow
+
+The v0.2 authored language remains available with Python, Ruby, JavaScript, TypeScript, and Java syntax adapters. Its checks validate declared relationships, binding existence, and resolved import boundaries. It does not provide the implementation agreement of the new Java/Spring workflow. Generation and runtime instrumentation for the other languages are future adapters.
 
 ## Learn to read Vitrifi
 
-Start with [Reading and writing Vitrifi](docs/reading-vitrifi.md). It walks through a feature, explains the difference between types, resources, operations, and boundaries, and shows how to follow a promise into its implementation and tests.
+For the original authored syntax, start with [Reading and writing Vitrifi](docs/reading-vitrifi.md). It walks through a feature, explains types, resources, operations, and boundaries, and shows how to follow a promise into its implementation and tests.
 
 Use the [syntax reference](docs/language.md) for the exact grammar, required fields, defaults, and compiler rules. The [checkout exercises](examples/checkout/README.md) let you try changes and see the resulting diagnostics.
 
@@ -66,7 +90,7 @@ To check a single feature and its imported feature modules:
 cargo run -- check examples/checkout/discounts.vitrifi
 ```
 
-To check all `.vitrifi` files below a repository root:
+For a repository containing only authored feature files, check all `.vitrifi` files below its root:
 
 ```sh
 cargo run -- check --root /path/to/repository
@@ -79,7 +103,7 @@ Paths in `use`, `bind`, boundary patterns, and check working directories are rel
 Open the changed `.vitrifi` file first. Its diff shows changes to exposed types, requirements, effects, dependencies, or boundary permissions. Follow imports when a change crosses a feature boundary. Source code and acceptance tests remain ordinary reviewable files.
 
 ```sh
-cargo run -- review --base HEAD
+cargo run -- review --root examples/checkout --base HEAD
 cargo run -- check --root examples/checkout --json
 ```
 
@@ -110,7 +134,7 @@ The Python checkout path has seven acceptance checks. The JavaScript/TypeScript 
 
 The feature file has a small, explicit vocabulary: types, operations, requirements, resources, effects, calls, boundaries, and checks. Its compiler can reject invalid relationships without executing arbitrary feature-file code. Imports support separate ownership and reusable interfaces across a repository.
 
-Rust is the compiler implementation language; `.vitrifi` is the language contributors author. The host application keeps its own language and toolchain. This separation lets a Ruby or Java repository adopt the same feature language without adding executable TypeScript definitions.
+Rust is the compiler implementation language. `.vitrifi` is the generated review format for Java/Spring and the authored language for the earlier adapters. The host application keeps its own language and toolchain. This separation lets a Ruby or Java repository adopt the same feature language without adding executable TypeScript definitions.
 
 Distributed modules establish a path toward incremental analysis; they are not a claim of unlimited scale. The prototype loads an entry's transitive feature imports, or discovers all modules for a repository-wide check. Large-repository performance and incremental caches need separate measurement and work.
 
