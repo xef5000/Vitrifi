@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="See how Vitrifi turns Java source into a reviewable architecture view, checks declared policies, and catches implementation drift.">
+  <meta name="description" content="Explore executable Vitrifi workflows, checked Java/Spring architecture, and replayable proof certificates for behavior-preserving refactors.">
   <meta name="theme-color" content="#f5f5ef">
   <title>Vitrifi — Architecture, grounded in code.</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./style.css">
   <script src="./examples.js" defer></script>
+  <script src="./proofs.js" defer></script>
   <script src="./app.js" defer></script>
 </head>
 <body>
@@ -19,9 +20,9 @@
       vitrifi<span class="brand-dot">.</span>
     </a>
     <nav aria-label="Main navigation">
-      <a href="#how-it-works">How it works</a>
+      <a href="#workflows">Read the workflow</a>
       <a href="#playground">Try a change</a>
-      <a href="#generated">Read the output</a>
+      <a href="#proofs">Prove a refactor</a>
     </nav>
     <a class="repo-link" href="https://github.com/xef5000/Vitrifi">GitHub <span aria-hidden="true">↗</span></a>
   </header>
@@ -31,66 +32,94 @@
       <div class="hero-copy">
         <div class="eyebrow"><span class="status-dot"></span> Architecture, grounded in code</div>
         <h1 id="hero-title">The code changes.<br>The architecture<br><em>comes with it.</em></h1>
-        <p class="hero-description">Turn implementation into a feature you can read. Declare the rules that matter. Check that the code still follows them.</p>
+        <p class="hero-description">Write a feature’s flow in Vitrifi. Compile it into checked Java. Carry a replayable proof when a structural refactor preserves its behavior.</p>
         <div class="hero-actions">
           <a class="button button-dark" href="#playground">See what it catches <span aria-hidden="true">↘</span></a>
-          <a class="text-link" href="#generated">Explore a .vitrifi file <span aria-hidden="true">→</span></a>
+          <a class="text-link" href="#proofs">See a certified refactor <span aria-hidden="true">→</span></a>
         </div>
-        <p class="hero-meta"><span>v0.3 prototype</span><span>Java + Spring</span><span>Feature-local files</span></p>
+        <p class="hero-meta"><span>Java + Spring pilot</span><span>Compiled workflows</span><span>Proof certificates</span></p>
       </div>
 
-      <div class="hero-visual" aria-label="Java source becomes a generated feature view, checked with policies and runtime evidence">
-        <div class="visual-topline"><span class="micro">ONE FEATURE. A CONNECTED VIEW.</span><span class="visual-index">01 / 03</span></div>
-        <div class="source-chip"><span class="file-icon">J</span><span>DiscountService.java</span><span class="chip-tag">source</span></div>
-        <div class="flow-connector"><span></span><code>javac + Spring analysis</code></div>
+      <div class="hero-visual" aria-label="An authored workflow compiles into a Spring service, checked against Java actions and an independent target">
+        <div class="visual-topline"><span class="micro">ONE FEATURE. AN EXECUTABLE FLOW.</span><span class="visual-index">WORKFLOW / 1</span></div>
+        <div class="source-chip"><span class="file-icon">V</span><span>Checkout.Discounts.workflow.vitrifi</span><span class="chip-tag">source</span></div>
+        <div class="flow-connector"><span></span><code>compile + check native actions</code></div>
         <div class="hero-code-card">
-          <div class="window-bar"><span class="file-icon file-icon-green">V</span><span>Checkout.Discounts.vitrifi</span><span class="generated-label">GENERATED</span></div>
-          <pre aria-label="Abbreviated generated feature excerpt"><code><span class="token-keyword">feature</span> <span class="token-type">Checkout.Discounts</span> {
-  <span class="token-keyword">export resource</span> Carts;
-
-  <span class="token-keyword">export operation</span> <span class="token-function">preview</span>(…)
-    <span class="token-keyword">effects</span> [<span class="token-effect">read</span> Carts];
-    <span class="token-keyword">calls</span> [load];
-  <span class="token-comment">// … excerpt abbreviated</span>
-}</code></pre>
-          <div class="code-card-foot"><span class="little-square"></span> Implementation facts, ready for the PR.</div>
+          <div class="window-bar"><span class="file-icon file-icon-green">J</span><span>DiscountService.java</span><span class="generated-label">GENERATED</span></div>
+          <pre aria-label="Generated Java branch excerpt"><code><span class="token-comment">// Generated branch; surrounding calls omitted.</span>
+<span class="token-keyword">if</span> (owner) {
+} <span class="token-keyword">else</span> {
+  <span class="token-keyword">throw new</span> dev.vitrifi.workflow.Rejected(
+    <span class="token-string">"Only the cart owner can apply a coupon"</span>);
+}
+<span class="token-comment">// Validate coupon, then save.</span></code></pre>
+          <div class="code-card-foot"><span class="little-square"></span> Workflow controls order. Java implements actions.</div>
         </div>
         <div class="flow-connector flow-connector-short"><span></span></div>
-        <div class="proof-strip"><span class="check-icon" aria-hidden="true">✓</span><div><strong>No writes from preview</strong><span>Declared policy · checked against source</span></div><span class="proof-tag">CHECKED</span></div>
-        <div class="visual-caption"><span>Code provides the facts.</span><span>You provide the intent.</span></div>
+        <div class="proof-strip"><span class="check-icon" aria-hidden="true">✓</span><div><strong>No cart writes on business rejection</strong><span>Checked flow · analyzed Java · independent target</span></div><span class="proof-tag">CHECKED</span></div>
+        <div class="visual-caption"><span>One authored orchestration.</span><span>A reviewable implementation.</span></div>
       </div>
     </section>
 
     <section class="workflow shell" id="how-it-works" aria-labelledby="workflow-title">
       <div class="section-heading compact-heading"><p class="eyebrow">01 / The workflow</p><h2 id="workflow-title">A little intent. A lot less guesswork.</h2></div>
       <div class="workflow-grid">
-        <article><div class="step-label"><span>01</span><span class="micro">YOU AUTHOR</span></div><h3>Declare what matters.</h3><p>Name a feature, map a resource, and add policies to ordinary Java. Keep business logic in its own language.</p><code class="inline-example">@Forbid(action = "write", resource = "Carts")</code></article>
-        <article><div class="step-label"><span>02</span><span class="micro">THE COMPILER DERIVES</span></div><h3>Generate the relationships.</h3><p>Compiler analysis follows supported calls and Spring wiring. Signatures, dependencies, and SQL effects become a local <code>.vitrifi</code> file.</p><code class="inline-example">vitrifi generate --root your-app</code></article>
-        <article><div class="step-label"><span>03</span><span class="micro">EXECUTION ADDS EVIDENCE</span></div><h3>Check what really happens.</h3><p>Static checks enforce supported effect policies. Instrumented tests check actual JDBC attempts on the paths they exercise.</p><code class="inline-example">vitrifi verify --java --root your-app -- mvn test</code></article>
+        <article><div class="step-label"><span>01</span><span class="micro">YOU AUTHOR</span></div><h3>Make the flow explicit.</h3><p>A feature-local workflow defines calls, branches and business rejection. Java actions hold calculations and persistence. An independent target sets API and dependency limits.</p><code class="inline-example">no_effect_on_rejection [write Carts];</code></article>
+        <article><div class="step-label"><span>02</span><span class="micro">THE COMPILER CHECKS</span></div><h3>Generate checked orchestration.</h3><p>Check types, rejection paths, native effect bounds and target conformance before emitting a Spring service. Instrumented scenarios add JDBC execution evidence.</p><code class="inline-example">vitrifi workflow build --root your-app</code></article>
+        <article><div class="step-label"><span>03</span><span class="micro">A CHECKER REPLAYS</span></div><h3>Certify a structural refactor.</h3><p>Generate a certificate against a Git baseline. A separate kernel replays supported algebraic laws with native sources and dependencies pinned.</p><code class="inline-example">vitrifi workflow proof-check refactor.proof.json</code></article>
       </div>
+    </section>
+
+    <section class="workflow-section shell" id="workflows" aria-labelledby="authored-title">
+      <div class="section-heading"><div><p class="eyebrow">02 / Start with the flow</p><h2 id="authored-title">Read what executes.<br>Follow what it calls.</h2></div><p>A workflow is executable source. Start at an operation, follow each call to its typed action, then open the bound Java method to inspect the calculation.</p></div>
+      <div class="workflow-excerpts">
+        <article class="generated-code"><div class="panel-heading"><span>Checkout.Discounts.workflow.vitrifi</span><span class="micro">AUTHORED EXCERPTS</span></div><pre class="numbered-code" tabindex="0" aria-label="Workflow operation and action declaration"><code data-highlight>operation preview(cartId: "java.lang.String") -&gt; "dev.vitrifi.example.checkout.Cart" {
+  effects [read Carts];
+  let cart = call load(cartId);
+  return cart;
+}
+
+action load(cartId: "java.lang.String") -&gt; "dev.vitrifi.example.checkout.Cart" {
+  bind java "dev.vitrifi.example.checkout.CheckoutActions.load(java.lang.String)";
+  effects [read Carts];
+}</code></pre><div class="generated-footer"><span>Native types are checked by javac. Effect declarations are checked against the implementation.</span><a href="./examples/Checkout.Discounts.workflow.vitrifi" download>Download the full workflow ↓</a></div></article>
+        <aside class="workflow-reading"><p class="micro">FOLLOW A CALL</p><h3>preview → load → Java</h3><p><code>operation</code> defines the public flow. <code>let</code> binds a result once; <code>call</code> invokes a declared action. <code>return</code> ends the operation.</p><p><code>action</code> defines the native method’s typed contract. <code>bind java</code> points at its implementation. <code>effects</code> bounds recognized resource effects; it does not declare a Java method pure.</p><p><code>resource Carts table "carts";</code> gives SQL effects a feature-level name. The workflow compiler checks every branch against its declared policies.</p><a class="text-link" href="https://github.com/xef5000/Vitrifi/blob/main/docs/workflows.md">Read the language guide ↗</a></aside>
+      </div>
+      <div class="file-map" aria-label="Authored and generated files for one feature">
+        <div class="file-map-heading"><h3>Which files do I maintain?</h3><p>One feature, with a clear role for each file.</p></div>
+        <div class="file-map-grid">
+          <article><span class="file-role">YOU AUTHOR</span><code>*.workflow.vitrifi</code><p>Executable sequencing, branches, typed actions and rejection rules.</p></article>
+          <article><span class="file-role">YOU AUTHOR</span><code>CheckoutActions.java</code><p>Business calculations and persistence. The compiler checks the bindings and modeled effects.</p></article>
+          <article><span class="file-role">YOU AUTHOR</span><code>*.target.vitrifi</code><p>Independent public API, allowed effects and dependency boundaries. Generation never rewrites these obligations.</p><a href="./examples/Checkout.Discounts.target.vitrifi" download>Read the target ↓</a></article>
+          <article><span class="file-role file-role-derived">COMPILER EMITS</span><code>DiscountService.java</code><p>The Spring service built from the workflow. Committed for builds and review; edit the workflow to change it.</p></article>
+          <article><span class="file-role file-role-derived">ANALYZER DERIVES</span><code>Checkout.Discounts.vitrifi</code><p>The implementation’s resolved calls, transitive effects and source links. Check freshness in CI.</p><a href="#generated">Explore the generated view ↓</a></article>
+          <article><span class="file-role file-role-derived">PRODUCER GENERATES</span><code>*.proof.json</code><p>A replayable derivation for a supported refactor. Generated evidence with a versioned schema; no authored manifest.</p><a href="#proofs">Follow a proof ↓</a></article>
+        </div>
+      </div>
+      <p class="support-note">Already have Java orchestration? Keep it and generate a feature view from annotations. Compiled workflows are an additional path when you want Vitrifi to own the flow.</p>
     </section>
 
     <section class="playground-section" id="playground" aria-labelledby="playground-title">
       <div class="shell">
-        <div class="section-heading playground-heading"><div><p class="eyebrow">02 / Put a change to the test</p><h2 id="playground-title">Small diff.<br>Architectural consequence.</h2></div><p>Some mistakes hide behind a perfectly ordinary method call. Follow a change from Java to the rule it breaks.</p></div>
+        <div class="section-heading playground-heading"><div><p class="eyebrow">03 / Put a change to the test</p><h2 id="playground-title">Small diff.<br>Architectural consequence.</h2></div><p>Move a write in the workflow, hide one in Java, or leave a snapshot stale. Follow each change to the check it triggers.</p></div>
         <div class="playground">
           <div class="scenario-tabs" role="tablist" aria-label="Example changes" id="scenario-tabs"></div>
           <div id="scenario-panel" role="tabpanel" tabindex="0" aria-labelledby="scenario-title">
             <div class="scenario-header"><div><p class="micro" id="scenario-label"></p><h3 id="scenario-title"></h3><p id="scenario-description"></p></div><div class="change-toggle" role="group" aria-label="Implementation version"><button type="button" id="before-button" aria-pressed="true">Before</button><button type="button" id="after-button" aria-pressed="false">Introduce the change <span aria-hidden="true">↗</span></button></div></div>
             <div class="demo-grid">
-              <div class="demo-source"><div class="panel-heading"><span><span class="file-icon">J</span> DiscountService.java</span><span id="code-version">ORIGINAL</span></div><pre class="numbered-code" tabindex="0" aria-label="Java example"><code id="scenario-code"></code></pre><div class="policy-bar"><span class="micro">DECLARED POLICY</span><code id="scenario-policy"></code></div></div>
+              <div class="demo-source"><div class="panel-heading"><span><span class="file-icon" id="scenario-file-icon">V</span><span id="scenario-file">Checkout.Discounts.workflow.vitrifi</span></span><span id="code-version">ORIGINAL</span></div><pre class="numbered-code" id="scenario-source" tabindex="0" aria-label="Vitrifi workflow example"><code id="scenario-code"></code></pre><div class="policy-bar"><span class="micro">DECLARED POLICY</span><code id="scenario-policy"></code></div></div>
               <div class="demo-result" aria-live="polite" aria-atomic="true"><div class="panel-heading"><span>Vitrifi’s view</span><span class="status-badge" id="result-status"></span></div><div class="result-content"><h4 id="result-label"></h4><p id="result-summary"></p><div class="effect-path" id="effect-path" aria-label="Relationship or execution path"></div><div class="terminal"><div><span aria-hidden="true">$</span> <code id="result-command"></code></div><pre id="result-output"></pre></div></div></div>
             </div>
             <div class="scenario-explanation"><span class="explanation-symbol" aria-hidden="true">↳</span><p id="scenario-explanation"></p></div>
             <div class="demo-footnote"><span><span class="little-square"></span> Interactive explanation · prewritten outcomes and condensed output. No compiler runs in your browser.</span><span id="scenario-limit"></span></div>
           </div>
-          <noscript><div class="no-script"><h3>A preview method accidentally writes to the cart.</h3><p>With <code>@Forbid(action = "write", resource = "Carts")</code>, adding <code>carts.save(...)</code> to <code>preview()</code> produces a forbidden-effect diagnostic. Regenerating the feature file cannot approve the write.</p><p>Enable JavaScript to explore all four before/after examples. The rest of this page works without it.</p></div></noscript>
+          <noscript><div class="no-script"><h3>A workflow writes before rejecting.</h3><p>With <code>no_effect_on_rejection [write Carts];</code>, moving <code>call save(cart, code)</code> before a rejection guard produces <code>WORKFLOW_REJECTION_EFFECT</code>. Compilation leaves the previous generated service intact.</p><p>Enable JavaScript to explore all five before/after examples. The language guides, file roles and proof explanation work without it.</p></div></noscript>
         </div>
       </div>
     </section>
 
     <section class="generated-section shell" id="generated" aria-labelledby="generated-title">
-      <div class="section-heading"><div><p class="eyebrow">03 / Read the feature</p><h2 id="generated-title">A map that lives<br>beside the code.</h2></div><p>Open the feature file in a pull request. See what it exposes, what it calls, and what it can affect. Follow the source link when you need the implementation.</p></div>
+      <div class="section-heading"><div><p class="eyebrow">04 / Read the generated view</p><h2 id="generated-title">A map that lives<br>beside the code.</h2></div><p>The analyzer derives this view from Java, including services emitted from workflows. Inspect resolved calls and effects here; edit orchestration in the workflow. This excerpt comes from the original annotation-based example.</p></div>
       <div class="generated-grid">
         <div class="generated-code"><div class="panel-heading"><span><span class="file-icon file-icon-green">V</span> Checkout.Discounts.vitrifi</span><span class="micro">GENERATED EXCERPT</span></div><pre class="numbered-code" tabindex="0" aria-label="Generated Vitrifi code"><code id="generated-code"><span class="code-line" data-concept="feature"><span class="line-number" aria-hidden="true">1</span><span><span class="token-keyword">feature</span> <span class="token-type">Checkout.Discounts</span> {</span></span>
 <span class="code-line" data-concept="purpose"><span class="line-number" aria-hidden="true">2</span><span>  <span class="token-keyword">purpose</span> <span class="token-string">"Apply one valid coupon to the owner's cart without writes on rejection"</span>;</span></span>
@@ -109,20 +138,70 @@
 <span class="code-line"><span class="line-number" aria-hidden="true">15</span><span>}</span></span></code></pre><div class="generated-footer"><span>Excerpt · long lines wrapped · comments shortened</span><a href="./examples/Checkout.Discounts.vitrifi" download>Download the actual file <span aria-hidden="true">↓</span></a></div></div>
         <aside class="reading-guide" aria-label="Vitrifi language guide"><p class="micro">FOLLOW THE FILE</p><div class="concept-buttons" role="group" aria-label="Explain a language element"><button type="button" data-concept="feature" aria-pressed="true">feature</button><button type="button" data-concept="purpose" aria-pressed="false">purpose</button><button type="button" data-concept="type" aria-pressed="false">type</button><button type="button" data-concept="resource" aria-pressed="false">resource</button><button type="button" data-concept="operation" aria-pressed="false">operation</button><button type="button" data-concept="bind" aria-pressed="false">bind</button><button type="button" data-concept="effects" aria-pressed="false">effects</button><button type="button" data-concept="calls" aria-pressed="false">calls</button></div><div class="concept-definition" aria-live="polite"><span id="concept-number" class="concept-number">01</span><h3 id="concept-title">The capability, named.</h3><p id="concept-description">A feature groups source entry operations and the code they reach. Its name comes from @Feature in Java. The generated view gives that capability a place in the pull request.</p><span class="provenance-label" id="concept-origin">AUTHORED IDENTITY · DERIVED RELATIONSHIPS</span></div><p class="guide-note">Select a term to follow it in the file.</p></aside>
       </div>
-      <div class="repo-layout"><div><p class="micro">SCALES WITH YOUR REPO</p><h3>One feature. One review surface.</h3><p>Generate a file beside the implementation. Other features get their own views. Policies stay in source annotations; regeneration updates the facts.</p></div><pre><code><span class="token-comment">checkout/</span>
+      <div class="repo-layout"><div><p class="micro">SCALES WITH YOUR REPO</p><h3>Start the review at the feature.</h3><p>Read the authored flow and target beside their implementation. Use the generated view to follow transitive dependencies. Each feature gets its own files.</p></div><pre><code><span class="token-comment">checkout/</span>
+├── <span class="tree-highlight">Checkout.Discounts.workflow.vitrifi</span>
+├── Checkout.Discounts.target.vitrifi
+├── CheckoutActions.java
 ├── DiscountService.java
 ├── JdbcCartRepository.java
-└── <span class="tree-highlight">Checkout.Discounts.vitrifi</span>  <span class="token-comment">← start your review here</span></code></pre></div>
+└── Checkout.Discounts.vitrifi</code></pre></div>
     </section>
 
-    <section class="scope-section shell" aria-labelledby="scope-title"><div class="section-heading"><div><p class="eyebrow">04 / Know what you know</p><h2 id="scope-title">Evidence with its<br>boundaries attached.</h2></div><p>A trustworthy view tells you where its knowledge ends. Vitrifi keeps authored intent, derived facts, and observed behavior distinct.</p></div><div class="scope-grid"><article><span class="scope-icon">↳</span><h3>Derived from source</h3><p>Java signatures, supported calls, bounded Spring wiring, and recognized SQL effects. Unknown reachable behavior produces <code>incomplete</code>.</p><span class="scope-tag">STATIC ANALYSIS</span></article><article><span class="scope-icon">✓</span><h3>Observed in execution</h3><p>Fresh scenario evidence from synchronous Spring proxies and instrumented JDBC. An error-path policy needs an actual exceptional invocation.</p><span class="scope-tag">RUNTIME EVIDENCE</span></article><article><span class="scope-icon">…</span><h3>Still outside the view</h3><p>All possible inputs, arbitrary libraries, async work, database triggers, and durable transaction outcomes. Passing scenarios cover the paths they exercised.</p><span class="scope-tag">EXPLICIT LIMITS</span></article></div><p class="support-note"><strong>Start with Java + Spring.</strong> This generated workflow supports Java 21+ and a conservative SQL subset. Python, Ruby, JavaScript, and TypeScript currently have the earlier authored workflow.</p></section>
+    <section class="proof-section" id="proofs" aria-labelledby="proofs-title">
+      <div class="shell">
+        <div class="section-heading"><div><p class="eyebrow">05 / Carry the reason it is safe</p><h2 id="proofs-title">A refactor with<br>a replayable proof.</h2></div><p>The same calls and effect sets do not establish the same behavior. A certificate records a derivation under explicit laws, then an independent kernel checks it against actual source.</p></div>
+        <div class="proof-demo">
+          <div class="proof-tabs" id="proof-tabs" role="tablist" aria-label="Workflow proof examples"></div>
+          <div id="proof-panel" role="tabpanel" tabindex="0" aria-labelledby="proof-title">
+            <div class="scenario-header"><div><p class="micro">A REFACTOR AGAINST A COMMITTED GIT BASELINE</p><h3 id="proof-title"></h3><p id="proof-description"></p></div></div>
+            <div class="proof-comparison">
+              <article class="proof-code"><div class="panel-heading"><span id="proof-file-before"></span><span>BASELINE</span></div><pre class="numbered-code" tabindex="0" aria-label="Baseline source excerpt"><code id="proof-before"></code></pre></article>
+              <article class="proof-code"><div class="panel-heading"><span id="proof-file-after"></span><span>CANDIDATE</span></div><pre class="numbered-code" tabindex="0" aria-label="Candidate source excerpt"><code id="proof-after"></code></pre></article>
+            </div>
+            <div class="proof-result demo-result" id="proof-result" aria-live="polite" aria-atomic="true">
+              <div class="proof-verdict"><span class="status-badge" id="proof-status"></span><h3 id="proof-result-label"></h3><p id="proof-summary"></p><p class="proof-consequence" id="proof-consequence"></p></div>
+              <div class="terminal"><div><span aria-hidden="true">$</span><code id="proof-command"></code></div><pre id="proof-output"></pre></div>
+            </div>
+            <div class="proof-meeting" id="proof-meeting"><span>baseline</span><span aria-hidden="true">→</span><strong>common term</strong><span aria-hidden="true">←</span><span>candidate</span><p>Replay both derivations. Check local names by lexical binding identity.</p></div>
+            <details class="proof-report" id="proof-report"><summary>What the real checker reports <span>Selected JSON fields from the checkout demonstration</span></summary><pre tabindex="0"><code>{
+  "status": "passed",
+  "claim": "workflow_equivalent",
+  "base_pinned_by_caller": true,
+  "checked_steps": 3,
+  "laws": { "branch_continuation": 3 },
+  "rules": "vitrifi.workflow-laws/1"
+}</code></pre></details>
+            <p class="demo-footnote">Prewritten snapshots from the Git/javac mutation suite · no compiler or proof checker runs in your browser. Workflow excerpts show the applyCoupon body; declarations are in the downloadable workflow. Terminal output is condensed; “…” stands for the workflow path.</p>
+          </div>
+          <noscript><div class="no-script"><h3>Flat guards can become nested branches.</h3><p>The checkout refactor moves each continuation into its successful branch. Three <code>branch_continuation</code> steps and a local rename establish a common term, with the same ordered native calls and exits. Adding a call or changing a rejection has no certificate under these laws. Changing a Java calculation fails the unchanged-context check.</p></div></noscript>
+        </div>
+        <div class="proof-explanation">
+          <article><p class="micro">WHAT THE LAWS ALLOW</p><h3>A small, explicit algebra.</h3><ul><li>Move a following continuation into each branch that can continue.</li><li>Select a literal <code>true</code> or <code>false</code> branch.</li><li>Replace identical branches with their shared body.</li><li>Compare terms allowing consistent local variable renaming.</li></ul><p>Every intermediate must still pass type, scope, exit and rejection-effect checks. There is no rule for reordering, duplicating or removing arbitrary Java calls.</p></article>
+          <article><p class="micro">WHAT THE CERTIFICATE PINS</p><h3>Source and assumptions travel together.</h3><p>Exact workflow endpoints, an immutable Git baseline, native source and resources, target selection, ordered dependency contents, analyzer, Java runtime properties and checker implementation.</p><p>Both endpoints use the same pinned current dependency environment. Checking reconstructs the inputs and replays the derivation; it never trusts a recorded success flag or reruns proof search.</p><a class="text-link" href="https://github.com/xef5000/Vitrifi/blob/main/docs/proof-certificates.md">Read the proof guide ↗</a></article>
+        </div>
+        <p class="proof-boundary"><strong>The claim is restricted workflow equivalence under unchanged native behavior.</strong> It preserves values, business rejection and action-failure behavior, divergence, and ordered action invocations. It abstracts from timing, source locations and resource exhaustion. The Rust kernel and JVM are trusted implementations, not formally verified artifacts. Business correctness and fresh runtime tests remain separate obligations.</p>
+      </div>
+    </section>
 
-    <section class="start-section shell" id="start" aria-labelledby="start-title"><div><p class="eyebrow">TAKE IT TO YOUR TERMINAL</p><h2 id="start-title">Try the real checkout.</h2><p>Run the Spring/H2 example, then move a write before validation. See the policy fail against actual execution.</p><a class="text-link" href="https://github.com/xef5000/Vitrifi/blob/b8a2a76/docs/java-spring.md">Read the integration guide <span aria-hidden="true">↗</span></a></div><div class="quickstart"><div class="panel-heading"><span>From the repository root</span><button type="button" id="copy-commands">Copy commands <span aria-hidden="true">⧉</span></button></div><pre tabindex="0"><code id="quickstart-code">cargo build
+    <section class="scope-section shell" aria-labelledby="scope-title">
+      <div class="section-heading"><div><p class="eyebrow">06 / Know what you know</p><h2 id="scope-title">Evidence with its<br>boundaries attached.</h2></div><p>Source analysis, execution evidence and algebraic derivations answer different questions. Each keeps its assumptions visible.</p></div>
+      <div class="scope-grid">
+        <article><span class="scope-icon">↳</span><h3>Does the structure conform?</h3><p>Workflow types, rejection paths, supported Java calls, Spring wiring, SQL effects and independent targets. Unknown reachable behavior blocks a complete check.</p><span class="scope-tag">STATIC CHECKS</span></article>
+        <article><span class="scope-icon">✓</span><h3>What happened in a scenario?</h3><p>Instrumented tests observe actual JDBC attempts on exercised paths. Business rejection and infrastructure failure are distinct. Neither result proves rollback or durable outcomes.</p><span class="scope-tag">RUNTIME EVIDENCE</span></article>
+        <article><span class="scope-icon">=</span><h3>Did this refactor preserve behavior?</h3><p>A replayed derivation establishes restricted workflow equivalence with pinned native inputs. It does not certify a changed discount or transfer an old test report to new source.</p><span class="scope-tag">ALGEBRAIC CERTIFICATE</span></article>
+        <article><span class="scope-icon">…</span><h3>Is the business rule right?</h3><p>That still needs acceptance tests and review. Arbitrary Java equivalence, async work, reflection, database triggers and general native heap behavior remain outside the pilot.</p><span class="scope-tag">BUSINESS VALIDATION</span></article>
+      </div>
+      <p class="support-note"><strong>Start with Java + Spring.</strong> Compiled workflows and proof certificates currently target Java 21+ with bounded framework and SQL analysis. Python, Ruby, JavaScript and TypeScript retain the earlier authored architecture support.</p>
+    </section>
+
+    <section class="start-section shell" id="start" aria-labelledby="start-title"><div><p class="eyebrow">TAKE IT TO YOUR TERMINAL</p><h2 id="start-title">Try the real refactor.</h2><p>Run the compiled Spring/H2 checkout, then create a separate demo repository with a committed baseline, nested refactor and replayable certificate.</p><p>The demo directory must be new. Inspect its Git diff and <code>examples/workflow-checkout/refactor.proof.json</code> to follow the proof.</p><a class="text-link" href="https://github.com/xef5000/Vitrifi/blob/main/docs/proof-certificates.md">Read the commands and assumptions <span aria-hidden="true">↗</span></a></div><div class="quickstart"><div class="panel-heading"><span>From the repository root</span><button type="button" id="copy-commands">Copy commands <span aria-hidden="true">⧉</span></button></div><pre tabindex="0"><code id="quickstart-code">cargo build
 mvn install
-mvn -f examples/spring-checkout/pom.xml generate-resources
+mvn -f examples/workflow-checkout/pom.xml generate-resources
 
-./target/debug/vitrifi generate --root examples/spring-checkout
-./target/debug/vitrifi verify --java --root examples/spring-checkout -- mvn test</code></pre><div class="quickstart-foot"><span>Requires JDK 21+, Maven, and Rust.</span><span id="copy-status" role="status"></span></div></div></section>
+./target/debug/vitrifi workflow check --root examples/workflow-checkout
+./target/debug/vitrifi workflow verify --root examples/workflow-checkout -- mvn test
+
+python3 scripts/test-workflow-proofs.py --demo-dir /tmp/vitrifi-proof-demo</code></pre><div class="quickstart-foot"><span>Requires JDK 21+, Maven, Rust, Python 3 and Git.</span><span id="copy-status" role="status"></span></div></div></section>
   </main>
   <footer class="site-footer shell"><a class="brand footer-brand" href="#">vitrifi<span class="brand-dot">.</span></a><p>Intent in the source. Architecture in the review.</p><a href="https://github.com/xef5000/Vitrifi">Explore the repository <span aria-hidden="true">↗</span></a></footer>
 </body>

@@ -11,7 +11,8 @@
   })[character]);
 
   function highlight(source) {
-    const tokens = /\/\/[^\n]*|"(?:\\.|[^"\\])*"|@[A-Za-z][\w.]*|\b(?:public|private|return|throw|new|if|int|void|class|final)\b|\b[A-Z][A-Za-z0-9_]*\b|\b[a-z][A-Za-z0-9_]*(?=\()/g;
+    const keywords = new Set("public private return throw new if else int void class final boolean workflow feature purpose emit actions java resource table action bind effects operation let call reject no_effect_on_rejection target cover boundary dependencies forbid export true false".split(" "));
+    const tokens = /\/\/[^\n]*|"(?:\\.|[^"\\])*"|@[A-Za-z][\w.]*|\b[A-Za-z][A-Za-z0-9_]*\b/g;
     let html = "";
     let previous = 0;
     for (const match of source.matchAll(tokens)) {
@@ -20,14 +21,27 @@
       if (token.startsWith("//")) kind = "comment";
       else if (token.startsWith('"')) kind = "string";
       else if (token.startsWith("@")) kind = "annotation";
+      else if (keywords.has(token)) kind = "keyword";
+      else if (/^(read|write)$/.test(token)) kind = "effect";
       else if (/^[A-Z]/.test(token)) kind = "type";
-      else if (!/^(public|private|return|throw|new|if|int|void|class|final)$/.test(token)) kind = "function";
+      else if (source[match.index + token.length] === "(") kind = "function";
+      else kind = "plain";
       html += escape(source.slice(previous, match.index));
       html += `<span class="token-${kind}">${escape(token)}</span>`;
       previous = match.index + token.length;
     }
     return html + escape(source.slice(previous));
   }
+
+  function renderCode(element, source, original) {
+    const originalLines = original && new Set(original.split("\n").map((line) => line.trim()));
+    element.innerHTML = source.split("\n").map((line, index) => {
+      const added = originalLines && !originalLines.has(line.trim());
+      return `<span class="code-line${added ? " line-added" : ""}"><span class="line-number" aria-hidden="true">${index + 1}</span><span>${highlight(line) || " "}</span></span>`;
+    }).join("");
+  }
+
+  document.querySelectorAll("[data-highlight]").forEach((element) => renderCode(element, element.textContent.trim()));
 
   let selected = 0;
   let changed = false;
@@ -78,15 +92,14 @@
     byId("scenario-title").textContent = example.title;
     byId("scenario-description").textContent = example.description;
     byId("scenario-policy").textContent = example.policy;
+    byId("scenario-file").textContent = example.file || "DiscountService.java";
+    byId("scenario-file-icon").textContent = example.file ? "V" : "J";
+    byId("scenario-source").setAttribute("aria-label", example.file ? "Vitrifi workflow example" : "Java example");
     byId("before-button").setAttribute("aria-pressed", String(!changed));
     byId("after-button").setAttribute("aria-pressed", String(changed));
     byId("code-version").textContent = changed ? "CHANGED LINES HIGHLIGHTED" : "ORIGINAL";
 
-    const originalLines = new Set(example.before.code.split("\n").map((line) => line.trim()));
-    byId("scenario-code").innerHTML = version.code.split("\n").map((line, index) => {
-      const added = changed && !originalLines.has(line.trim());
-      return `<span class="code-line${added ? " line-added" : ""}"><span class="line-number" aria-hidden="true">${index + 1}</span><span>${highlight(line) || " "}</span></span>`;
-    }).join("");
+    renderCode(byId("scenario-code"), version.code, changed ? example.before.code : undefined);
 
     byId("result-status").textContent = version.status.toUpperCase();
     document.querySelector(".demo-result").dataset.state = version.status;
@@ -115,6 +128,55 @@
 
   byId("before-button").addEventListener("click", () => { changed = false; render(); });
   byId("after-button").addEventListener("click", () => { changed = true; render(); });
+
+  const proofCases = window.VITRIFI_PROOFS;
+  const proofTabs = proofCases.map((example, index) => {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.id = `proof-tab-${example.id}`;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-controls", "proof-panel");
+    tab.textContent = example.tab;
+    tab.addEventListener("click", () => selectProof(index));
+    tab.addEventListener("keydown", (event) => {
+      let next;
+      if (event.key === "ArrowRight") next = (index + 1) % proofCases.length;
+      if (event.key === "ArrowLeft") next = (index - 1 + proofCases.length) % proofCases.length;
+      if (event.key === "Home") next = 0;
+      if (event.key === "End") next = proofCases.length - 1;
+      if (next !== undefined) {
+        event.preventDefault();
+        selectProof(next);
+        proofTabs[next].focus();
+      }
+    });
+    byId("proof-tabs").append(tab);
+    return tab;
+  });
+
+  function selectProof(index) {
+    const example = proofCases[index];
+    proofTabs.forEach((tab, position) => {
+      tab.setAttribute("aria-selected", String(index === position));
+      tab.tabIndex = index === position ? 0 : -1;
+    });
+    byId("proof-panel").setAttribute("aria-labelledby", proofTabs[index].id);
+    byId("proof-title").textContent = example.title;
+    byId("proof-description").textContent = example.description;
+    byId("proof-file-before").textContent = example.file;
+    byId("proof-file-after").textContent = example.file;
+    renderCode(byId("proof-before"), example.before);
+    renderCode(byId("proof-after"), example.after, example.before);
+    byId("proof-result").dataset.state = example.status;
+    byId("proof-status").textContent = example.status === "unproven" ? "NOT CERTIFIED" : example.status.toUpperCase();
+    byId("proof-result-label").textContent = example.label;
+    byId("proof-summary").textContent = example.summary;
+    byId("proof-command").textContent = example.command;
+    byId("proof-output").textContent = example.output;
+    byId("proof-consequence").textContent = example.consequence;
+    byId("proof-meeting").hidden = example.status !== "passed";
+    byId("proof-report").hidden = example.status !== "passed";
+  }
 
   const concepts = {
     feature: { title: "The capability, named.", description: "A feature groups source entry operations and the code they reach. Its name comes from @Feature in Java. The generated view gives that capability a place in the pull request.", origin: "Authored identity · derived relationships" },
@@ -170,6 +232,7 @@
   });
 
   render();
+  selectProof(0);
   selectConcept("feature");
   document.body.classList.add("js-ready");
 })();
