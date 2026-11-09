@@ -64,6 +64,8 @@ Use the existing Java input options (`--java-analyzer`, `--source-root`, `--clas
 
 `prove` searches the supported laws, replays its result through the checker, and writes a new artifact. It does not edit the workflow or generated Java. The output path must be inside `--root`, end in `.proof.json`, have an existing ordinary parent directory and not already exist. `proof-check` never calls proof search and never writes source or evidence.
 
+The recorded Git commit must be available locally; fetch the approved baseline when CI uses a shallow checkout. The checker does not fetch historical objects or execute commands from the certificate.
+
 In CI, pass the independently selected review baseline with `--base` and required targets with repeated `--target` flags. The checker resolves the reference and requires the exact recorded commit. Without `--base`, it checks against the certificate's recorded commit and reports `base_pinned_by_caller: false`; that proves equivalence to that commit, not that a reviewer approved it. A certificate is not an authorization or a signature.
 
 If the producer reports `PROOF_NOT_FOUND`, it has not established a common term under these laws. The workflows might still be equivalent. This first ruleset deliberately covers a small set of useful structural refactors.
