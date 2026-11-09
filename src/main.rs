@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
-use vitrifi::{compiler, evidence, java, model::*, review, target, targets, workflows};
+use vitrifi::{compiler, evidence, java, model::*, proof, review, target, targets, workflows};
 
 const HELP:&str="Vitrifi — a compiled architecture language\n\nUsage: vitrifi <command> [feature.vitrifi] [--root DIR] [--json]\n\n  init       Create a feature-local source file\n  check      Compile and check a feature and its imported contracts (or all features)\n  compile    Emit the linked graph to .vitrifi/program.json (or --out FILE)\n  inspect    Read typed feature contracts in the terminal\n  source     Expand a bound implementation: source feature.vitrifi operation\n  review     Compare architecture declarations with a Git commit: --base REF\n  verify     Explicitly run declared verification commands\n  evidence   Inspect recorded evidence and detect stale inputs\n\nAll paths inside feature files are relative to that feature file.\nCompilation never executes feature source or verification commands.\n";
 
@@ -271,7 +271,78 @@ fn stale_target_selection() -> Value {
         "message":"Discovered target selection changed during this command; retry to check the new targets"})
 }
 
+fn execute_proof(args: &Args, root: &Path, command: &str) -> Result<u8, String> {
+    if args.check_generated || !args.runner.is_empty() || args.timeout.is_some() {
+        return Err(
+            "Proof commands accept neither --check, --timeout nor a runner after --".into(),
+        );
+    }
+    let file = args.member.as_deref().ok_or("Usage: workflow prove FILE.workflow.vitrifi --base REF --out FILE.proof.json; workflow proof-check FILE.proof.json [--base REF]")?;
+    let options = java_options(args)?;
+    let certificate = if command == "prove" {
+        let base = args
+            .base
+            .as_deref()
+            .ok_or("workflow prove requires --base REF")?;
+        let destination = args
+            .out
+            .as_deref()
+            .ok_or("workflow prove requires --out FILE.proof.json")?;
+        let certificate = proof::produce(root, Path::new(file), base, &options, &args.targets)?;
+        // Replay with the checker before publishing any producer output.
+        proof::check(root, &certificate, Some(base), &options, &args.targets)?;
+        proof::write(root, destination, &certificate)?;
+        certificate
+    } else {
+        if args.out.is_some() {
+            return Err("workflow proof-check does not accept --out".into());
+        }
+        let certificate = proof::read(root, Path::new(file))?;
+        proof::check(
+            root,
+            &certificate,
+            args.base.as_deref(),
+            &options,
+            &args.targets,
+        )?;
+        certificate
+    };
+    let mut laws = std::collections::BTreeMap::<String, usize>::new();
+    for step in certificate
+        .before_steps
+        .iter()
+        .chain(&certificate.after_steps)
+    {
+        let name = serde_json::to_value(step.rule)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        *laws.entry(name).or_default() += 1;
+    }
+    output(
+        args,
+        &json!({"status":"passed", "claim":"workflow_equivalent", "workflow":certificate.workflow,
+        "base_commit":certificate.base_commit, "base_pinned_by_caller":args.base.is_some(),
+        "semantics":certificate.semantics,"rules":certificate.rules,
+        "checked_steps":certificate.before_steps.len()+certificate.after_steps.len(),
+        "laws":laws,"native_files_pinned":certificate.context.files.len(),"targets":certificate.context.targets,
+        "common_term_sha256":certificate.common_term_sha256,
+        "certificate":args.out.as_ref().map(|p|p.to_string_lossy().into_owned()).unwrap_or_else(||file.into()),
+        "scope":"Algebraic workflow equivalence under unchanged native actions, policies and pinned dependencies; preserves values, rejection/failure exits and ordered action invocations. Business correctness and runtime evidence require their own review and tests."}),
+    );
+    Ok(0)
+}
+
 fn execute_workflows(args: &Args, root: &Path) -> Result<u8, String> {
+    let subcommand = args
+        .entry
+        .as_ref()
+        .and_then(|p| p.to_str())
+        .unwrap_or("check");
+    if matches!(subcommand, "prove" | "proof-check") {
+        return execute_proof(args, root, subcommand);
+    }
     if args.check_generated || args.out.is_some() || args.base.is_some() {
         return Err("Workflow commands do not accept --check, --out, or --base; use workflow check for validation without writes".into());
     }
@@ -598,7 +669,7 @@ fn execute(args: &Args) -> Result<u8, String> {
     if args.command == "help" {
         print!("{HELP}");
         println!("\nGenerated Java/Spring workflow (JDK 21+):\n  generate   Derive feature-local .vitrifi files from annotated Java source\n  generate --check  Check generated snapshots without writing\n  check/inspect/review/verify --java  Analyze implementation-derived facts\n\n  --java-analyzer JAR   Or VITRIFI_JAVA_ANALYZER\n  --classpath-file FILE   Defaults to target/vitrifi-classpath.txt inside --root\n  --source-root DIR       Defaults to src/main/java inside --root\n  verify --java -- COMMAND...  Explicit instrumented test command\n  --timeout SECONDS       Verification limit; defaults to 120\n\nGenerated .vitrifi snapshots automatically select Java analysis.\n");
-        println!("Executable workflow pilot:\n  workflow lint|build|check|verify [FILE.workflow.vitrifi] --root DIR\n  build validates Java actions before emitting Spring services.\n  verify accepts -- COMMAND... for instrumented scenarios.\n");
+        println!("Executable workflow pilot:\n  workflow lint|build|check|verify [FILE.workflow.vitrifi] --root DIR\n  build validates Java actions before emitting Spring services.\n  verify accepts -- COMMAND... for instrumented scenarios.\n  workflow prove FILE --base REF --out FILE.proof.json\n  workflow proof-check FILE.proof.json [--base REF]\n");
         println!("Authored architecture targets:\n  lint --target FILE      Check a .target.vitrifi without Java or implementation\n  conform --target FILE   Compare authored constraints to Java source facts\n  verify --target FILE -- COMMAND...  Check conformance and target-linked evidence\n  --target FILE           Repeat to check several feature-local targets\n\ncheck, inspect, compile, verify and evidence discover .target.vitrifi files by default.\nUse explicit --target paths in CI so deleting a target cannot remove its obligations.\n");
         return Ok(0);
     }

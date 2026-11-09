@@ -179,7 +179,7 @@ fn source_paths_under(root: &Path, source_root: &Path) -> Result<Vec<String>, St
     Ok(paths)
 }
 
-fn source_paths(root: &Path, options: &Options) -> Result<Vec<String>, String> {
+pub(crate) fn source_paths(root: &Path, options: &Options) -> Result<Vec<String>, String> {
     source_paths_under(root, &options.source_root)
 }
 

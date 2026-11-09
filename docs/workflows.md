@@ -2,7 +2,7 @@
 
 A `.workflow.vitrifi` file is executable orchestration. The compiler emits a Spring service from it. Edit the workflow to change sequencing, branches and rejection paths; edit Java actions to change calculations or persistence. There is one authored orchestration, and the generated Java is committed for normal builds and PR review.
 
-This pilot implements `vitrifi.workflow/1`. It is deliberately small: synchronous calls, single-assignment bindings, boolean branches, return and explicit business rejection. It does not produce algebraic proof certificates.
+This pilot implements `vitrifi.workflow/1`. It is deliberately small: synchronous calls, single-assignment bindings, boolean branches, return and explicit business rejection. Restricted algebraic refactors can now carry independently replayed [proof certificates](proof-certificates.md).
 
 ## Which file should I read?
 
@@ -127,4 +127,4 @@ The closed workflow gives complete control-flow enumeration at the orchestration
 
 The [mutation and differential suite](../scripts/test-compiled-workflow.py) compares a reference AST interpreter to generated Java over 48 combinations of input branches and action failures. It checks outcomes, returned values, order and multiplicity, in addition to real Spring/JDBC scenarios. These tests validate the implementation; they do not prove general host-code equivalence or justify algebraic rewrites.
 
-A future proof step needs a versioned semantics, an explicitly justified set of rewrite rules and an independent certificate checker that pins leaf implementations and dependencies. This pilot supplies a small executable language on which to evaluate that idea. Equal effect sets alone remain insufficient for equivalence.
+The [proof-certificate extension](proof-certificates.md) adds a versioned ruleset, replay kernel and Git/native context pins for a limited set of structural refactors. It preserves ordered invocations and exit behavior without assuming Java leaves are pure. Equal effect sets alone remain insufficient for equivalence.

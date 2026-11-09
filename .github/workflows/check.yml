@@ -47,6 +47,8 @@ jobs:
           ./target/debug/vitrifi workflow check src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.workflow.vitrifi --root examples/workflow-checkout --target src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.target.vitrifi
           ./target/debug/vitrifi generate --check --root examples/workflow-checkout
           python3 scripts/test-compiled-workflow.py
+      - name: Check algebraic workflow certificates
+        run: python3 scripts/test-workflow-proofs.py
       - name: Check original checkout behavior
         run: ./target/debug/vitrifi verify --root examples/checkout
       - name: Check syntax highlighting

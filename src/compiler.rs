@@ -82,7 +82,7 @@ pub fn read_inside(root: &Path, path: &str) -> Result<String, String> {
     fs::read_to_string(actual).map_err(|e| format!("Cannot read UTF-8 source {path}: {e}"))
 }
 
-fn ignored(path: &Path) -> bool {
+pub(crate) fn ignored(path: &Path) -> bool {
     path.components().any(|c| matches!(c, Component::Normal(p) if matches!(p.to_str(), Some(".git"|".vitrifi"|".venv"|"venv"|"node_modules"|"vendor"|"target"|"build"|"dist"|".toolchain"|"__pycache__")) || p.to_string_lossy().ends_with(".egg-info")))
 }
 

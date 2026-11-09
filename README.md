@@ -8,7 +8,7 @@ The Rust core combines a `javac` analysis adapter with explicit Spring/JDBC runt
 
 Feature-local `.target.vitrifi` files now express independent design constraints: exact public Java interfaces, permitted effects, dependency boundaries, and runtime policies. `conform` compares those targets to source facts. The generated `.vitrifi` view still follows the implementation; regenerating it cannot widen a target. Start with the [target language and workflow guide](docs/targets.md).
 
-The compiled workflow pilot adds executable `.workflow.vitrifi` files: typed calls, branches and rejection paths generate a Spring service, while native Java actions are checked against declared effect bounds. Start with [compiled workflows](docs/workflows.md) and the [workflow checkout example](examples/workflow-checkout). This is the foundation for experimenting with stronger workflow reasoning; algebraic proof certificates are not implemented.
+The compiled workflow pilot adds executable `.workflow.vitrifi` files: typed calls, branches and rejection paths generate a Spring service, while native Java actions are checked against declared effect bounds. Start with [compiled workflows](docs/workflows.md) and the [workflow checkout example](examples/workflow-checkout). Restricted workflow refactors can now carry [algebraic proof certificates](docs/proof-certificates.md), replayed by a separate checker with pinned Git, native-source and dependency inputs.
 
 Open the [interactive explainer](site/index.html) in a browser for before/after examples, a guide to generated syntax, and the boundaries of each check. It is a small static site that works directly from disk; see [site/README.md](site/README.md).
 
