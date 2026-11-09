@@ -1,5 +1,7 @@
 # Architecture targets
 
+For executable orchestration that generates a Spring service, see the [compiled workflow language](workflows.md). Its syntax and guarantees are separate from authored targets and generated implementation views.
+
 An architecture target is an independently authored contract for a feature. It defines the public API, permitted resource effects, allowed dependency boundaries, and policies that the implementation must satisfy. Vitrifi compares it with facts obtained from Java source analysis, then checks runtime obligations against instrumented scenarios.
 
 Keep the target beside the feature's implementation:

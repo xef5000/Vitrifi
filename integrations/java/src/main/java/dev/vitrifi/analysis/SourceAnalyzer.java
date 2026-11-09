@@ -281,6 +281,7 @@ public final class SourceAnalyzer {
             String kind = switch (type) {
                 case API + "Forbid" -> "forbid";
                 case API + "NoEffectOnError" -> "no_effect_on_error";
+                case API + "NoEffectOnRejection" -> "no_effect_on_rejection";
                 default -> null;
             };
             if (kind == null) continue;
@@ -446,7 +447,7 @@ public final class SourceAnalyzer {
                 Operation known = methods.get(constructor);
                 if (known != null && classInitializersSafe(owner)) {
                     call(operation, getCurrentPath(), "new " + node.getIdentifier(), known.id, "resolved", "javac-resolved source constructor; no unmodeled class initializers");
-                } else if (plainRecord(owner) || standardExceptionConstructor(constructor)) {
+                } else if (plainRecord(owner) || (standardExceptionConstructor(constructor) || workflowExceptionConstructor(constructor))) {
                     intrinsicCall(operation, getCurrentPath(), "new " + node.getIdentifier(), constructor,
                             "bounded value-record or standard exception construction summary");
                 } else {
@@ -684,7 +685,7 @@ public final class SourceAnalyzer {
         String owner = ((TypeElement) method.getEnclosingElement()).getQualifiedName().toString();
         String name = method.getSimpleName().toString();
         if (owner.equals("java.lang.Object") && method.getKind() == ElementKind.CONSTRUCTOR) return true;
-        if (standardExceptionConstructor(method)) return true;
+        if (standardExceptionConstructor(method) || workflowExceptionConstructor(method)) return true;
         if (owner.equals("java.lang.String") && Set.of("length", "isEmpty", "isBlank", "strip", "trim", "toLowerCase",
                 "toUpperCase", "equals", "equalsIgnoreCase", "startsWith", "endsWith", "substring", "charAt", "compareTo", "concat").contains(name)) return true;
         if (owner.equals("java.lang.Math") && Set.of("min", "max", "abs", "round", "floor", "ceil", "addExact", "subtractExact", "multiplyExact").contains(name)) return true;
@@ -696,6 +697,14 @@ public final class SourceAnalyzer {
         TypeElement type = (TypeElement) method.getEnclosingElement();
         return !methods.containsKey(method) && plainRecord(type)
                 && type.getRecordComponents().stream().anyMatch(c -> c.getAccessor().equals(method));
+    }
+
+    private boolean workflowExceptionConstructor(ExecutableElement method) {
+        TypeElement owner = (TypeElement) method.getEnclosingElement();
+        if (method.getKind() != ElementKind.CONSTRUCTOR || sourceTypes.contains(owner)) return false;
+        String signature = method.getParameters().stream().map(p -> p.asType().toString()).collect(Collectors.joining(","));
+        return owner.getQualifiedName().contentEquals("dev.vitrifi.workflow.Rejected") && signature.equals("java.lang.String")
+                || owner.getQualifiedName().contentEquals("dev.vitrifi.workflow.Failed") && signature.equals("java.lang.String,java.lang.Throwable");
     }
 
     private boolean standardExceptionConstructor(ExecutableElement method) {
@@ -784,7 +793,7 @@ public final class SourceAnalyzer {
         List<AnnotationMirror> result = new ArrayList<>();
         for (AnnotationMirror annotation : element.getAnnotationMirrors()) {
             String name = annotation.getAnnotationType().toString();
-            if (Set.of(API + "Forbids", API + "NoEffectsOnError").contains(name)) {
+            if (Set.of(API + "Forbids", API + "NoEffectsOnError", API + "NoEffectsOnRejection").contains(name)) {
                 Object nested = values(annotation).get("value");
                 if (nested instanceof List<?> list) for (Object item : list) {
                     if (item instanceof AnnotationValue value && value.getValue() instanceof AnnotationMirror child) result.add(child);

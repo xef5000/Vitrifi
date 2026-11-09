@@ -144,7 +144,7 @@ public final class EvidenceSession implements AutoCloseable {
         for (VitrifiRuntime.Policy policy : policies.values()) {
             boolean violated = invocations.stream().anyMatch(invocation -> invocation.violated.contains(policy.key()));
             boolean tested = invocations.stream().anyMatch(invocation -> invocation.policies.contains(policy)
-                    && (!policy.kind().equals("no_effect_on_error") || "threw".equals(invocation.outcome)));
+                    && invocation.exercises(policy));
             String status = violated ? "violated" : tested ? "passed" : "untested";
             untested |= !tested;
             coverage.add(policy.describe(status));

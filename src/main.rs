@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::ExitCode,
 };
-use vitrifi::{compiler, evidence, java, model::*, review, target, targets};
+use vitrifi::{compiler, evidence, java, model::*, proof, review, target, targets, workflows};
 
 const HELP:&str="Vitrifi — a compiled architecture language\n\nUsage: vitrifi <command> [feature.vitrifi] [--root DIR] [--json]\n\n  init       Create a feature-local source file\n  check      Compile and check a feature and its imported contracts (or all features)\n  compile    Emit the linked graph to .vitrifi/program.json (or --out FILE)\n  inspect    Read typed feature contracts in the terminal\n  source     Expand a bound implementation: source feature.vitrifi operation\n  review     Compare architecture declarations with a Git commit: --base REF\n  verify     Explicitly run declared verification commands\n  evidence   Inspect recorded evidence and detect stale inputs\n\nAll paths inside feature files are relative to that feature file.\nCompilation never executes feature source or verification commands.\n";
 
@@ -271,6 +271,181 @@ fn stale_target_selection() -> Value {
         "message":"Discovered target selection changed during this command; retry to check the new targets"})
 }
 
+fn execute_proof(args: &Args, root: &Path, command: &str) -> Result<u8, String> {
+    if args.check_generated || !args.runner.is_empty() || args.timeout.is_some() {
+        return Err(
+            "Proof commands accept neither --check, --timeout nor a runner after --".into(),
+        );
+    }
+    let file = args.member.as_deref().ok_or("Usage: workflow prove FILE.workflow.vitrifi --base REF --out FILE.proof.json; workflow proof-check FILE.proof.json [--base REF]")?;
+    let options = java_options(args)?;
+    let certificate = if command == "prove" {
+        let base = args
+            .base
+            .as_deref()
+            .ok_or("workflow prove requires --base REF")?;
+        let destination = args
+            .out
+            .as_deref()
+            .ok_or("workflow prove requires --out FILE.proof.json")?;
+        let certificate = proof::produce(root, Path::new(file), base, &options, &args.targets)?;
+        // Replay with the checker before publishing any producer output.
+        proof::check(root, &certificate, Some(base), &options, &args.targets)?;
+        proof::write(root, destination, &certificate)?;
+        certificate
+    } else {
+        if args.out.is_some() {
+            return Err("workflow proof-check does not accept --out".into());
+        }
+        let certificate = proof::read(root, Path::new(file))?;
+        proof::check(
+            root,
+            &certificate,
+            args.base.as_deref(),
+            &options,
+            &args.targets,
+        )?;
+        certificate
+    };
+    let mut laws = std::collections::BTreeMap::<String, usize>::new();
+    for step in certificate
+        .before_steps
+        .iter()
+        .chain(&certificate.after_steps)
+    {
+        let name = serde_json::to_value(step.rule)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        *laws.entry(name).or_default() += 1;
+    }
+    output(
+        args,
+        &json!({"status":"passed", "claim":"workflow_equivalent", "workflow":certificate.workflow,
+        "base_commit":certificate.base_commit, "base_pinned_by_caller":args.base.is_some(),
+        "semantics":certificate.semantics,"rules":certificate.rules,
+        "checked_steps":certificate.before_steps.len()+certificate.after_steps.len(),
+        "laws":laws,"native_files_pinned":certificate.context.files.len(),"targets":certificate.context.targets,
+        "common_term_sha256":certificate.common_term_sha256,
+        "certificate":args.out.as_ref().map(|p|p.to_string_lossy().into_owned()).unwrap_or_else(||file.into()),
+        "scope":"Algebraic workflow equivalence under unchanged native actions, policies and pinned dependencies; preserves values, rejection/failure exits and ordered action invocations. Business correctness and runtime evidence require their own review and tests."}),
+    );
+    Ok(0)
+}
+
+fn execute_workflows(args: &Args, root: &Path) -> Result<u8, String> {
+    let subcommand = args
+        .entry
+        .as_ref()
+        .and_then(|p| p.to_str())
+        .unwrap_or("check");
+    if matches!(subcommand, "prove" | "proof-check") {
+        return execute_proof(args, root, subcommand);
+    }
+    if args.check_generated || args.out.is_some() || args.base.is_some() {
+        return Err("Workflow commands do not accept --check, --out, or --base; use workflow check for validation without writes".into());
+    }
+    let command = args
+        .entry
+        .as_ref()
+        .and_then(|p| p.to_str())
+        .unwrap_or("check");
+    if !matches!(command, "lint" | "build" | "check" | "verify") {
+        return Err(
+            "Usage: vitrifi workflow lint|build|check|verify [FILE.workflow.vitrifi] --root DIR"
+                .into(),
+        );
+    }
+    if command != "verify" && !args.runner.is_empty() {
+        return Err("Only workflow verify accepts a command after --".into());
+    }
+    if command == "lint" && !args.targets.is_empty() {
+        return Err("Use lint --target to lint targets, or workflow check --target to check their implementation".into());
+    }
+    let requested: Vec<PathBuf> = args.member.iter().map(PathBuf::from).collect();
+    let set = workflows::load(root, &requested)?;
+    if set.inputs.is_empty() {
+        return Err("No .workflow.vitrifi files found".into());
+    }
+    if !set.diagnostics.is_empty() || command == "lint" {
+        let passed = set.diagnostics.is_empty();
+        output(
+            args,
+            &json!({"status":if passed {"passed"} else {"failed"}, "diagnostics":set.diagnostics, "features":set.features,
+            "files":set.inputs.keys().collect::<Vec<_>>(), "scope":"Workflow syntax, types, modeled effect bounds and explicit rejection paths; Java actions not checked."}),
+        );
+        return Ok(if passed { 0 } else { 1 });
+    }
+    let options = java_options(args)?;
+    if command == "build" {
+        let files = set.build(root, &options, &args.targets)?;
+        output(args, &json!({"status":"passed", "generated":files}));
+        return Ok(0);
+    }
+    // Include all discovered workflow outputs when checking explicit entries as well.
+    let mut all_paths = workflows::discover(root)?;
+    all_paths.extend(requested);
+    let mut analysis =
+        java::analyze_with_workflows(root, &options, workflows::load(root, &all_paths)?)?;
+    set.validate(&analysis)?;
+    if !set.current(root) {
+        return Err("Workflow changed during analysis; retry".into());
+    }
+    analysis.inputs.extend(set.inputs.clone());
+    let target_set = if !args.targets.is_empty() || !targets::discover(root)?.is_empty() {
+        Some(targets::load(root, &args.targets)?)
+    } else {
+        None
+    };
+    let mut context = None;
+    let mut discovered_targets = Vec::new();
+    if let Some(targets) = &target_set {
+        let conformance = target::conform(&targets.features, &analysis.program);
+        if !targets.diagnostics.is_empty() || conformance.status != "passed" {
+            output(
+                args,
+                &json!({"status":"failed", "diagnostics":targets.diagnostics, "conformance":conformance, "executed":false}),
+            );
+            return Ok(1);
+        }
+        if !targets.current(root) {
+            return Err("Targets changed during analysis; retry".into());
+        }
+        analysis.inputs.extend(targets.inputs.clone());
+        discovered_targets = targets.files.iter().map(PathBuf::from).collect();
+        context = Some(java::TargetContext {
+            revision: targets.revision.clone(),
+            files: targets.files.clone(),
+            entries: conformance
+                .operations
+                .iter()
+                .map(|o| java::TargetEntry {
+                    feature: o.feature.clone(),
+                    method: o.binding.clone(),
+                    policies: o.policies.clone(),
+                })
+                .collect(),
+        });
+    }
+    let mut result = json!({"status":"passed", "files":set.inputs.keys().collect::<Vec<_>>(),
+        "scope":"Compiled workflow and attributed Java action bounds; runtime scenarios and native value semantics are separate obligations."});
+    if command == "verify" {
+        result = java::verify_with_target_selection(
+            root,
+            &analysis,
+            &args.runner,
+            args.timeout.unwrap_or(120),
+            context.as_ref(),
+            args.targets
+                .is_empty()
+                .then_some(discovered_targets.as_slice()),
+        )?;
+    }
+    output(args, &result);
+    Ok(if result["status"] == "passed" { 0 } else { 1 })
+}
+
 fn execute_targets(args: &Args, root: &Path, paths: &[PathBuf]) -> Result<u8, String> {
     if !matches!(
         args.command.as_str(),
@@ -431,6 +606,10 @@ fn execute_java(args: &Args, root: &Path, expect_no_targets: bool) -> Result<u8,
                 .as_deref()
                 .ok_or("review requires --base <Git revision>")?,
         )?;
+        result["workflow_changes"] = json!(workflows::review_changes(
+            root,
+            args.base.as_deref().unwrap_or("HEAD")
+        )?);
         result["target_changes"] = json!(targets::review_changes(
             root,
             args.base.as_deref().unwrap()
@@ -490,6 +669,7 @@ fn execute(args: &Args) -> Result<u8, String> {
     if args.command == "help" {
         print!("{HELP}");
         println!("\nGenerated Java/Spring workflow (JDK 21+):\n  generate   Derive feature-local .vitrifi files from annotated Java source\n  generate --check  Check generated snapshots without writing\n  check/inspect/review/verify --java  Analyze implementation-derived facts\n\n  --java-analyzer JAR   Or VITRIFI_JAVA_ANALYZER\n  --classpath-file FILE   Defaults to target/vitrifi-classpath.txt inside --root\n  --source-root DIR       Defaults to src/main/java inside --root\n  verify --java -- COMMAND...  Explicit instrumented test command\n  --timeout SECONDS       Verification limit; defaults to 120\n\nGenerated .vitrifi snapshots automatically select Java analysis.\n");
+        println!("Executable workflow pilot:\n  workflow lint|build|check|verify [FILE.workflow.vitrifi] --root DIR\n  build validates Java actions before emitting Spring services.\n  verify accepts -- COMMAND... for instrumented scenarios.\n  workflow prove FILE --base REF --out FILE.proof.json\n  workflow proof-check FILE.proof.json [--base REF]\n");
         println!("Authored architecture targets:\n  lint --target FILE      Check a .target.vitrifi without Java or implementation\n  conform --target FILE   Compare authored constraints to Java source facts\n  verify --target FILE -- COMMAND...  Check conformance and target-linked evidence\n  --target FILE           Repeat to check several feature-local targets\n\ncheck, inspect, compile, verify and evidence discover .target.vitrifi files by default.\nUse explicit --target paths in CI so deleting a target cannot remove its obligations.\n");
         return Ok(0);
     }
@@ -500,6 +680,9 @@ fn execute(args: &Args) -> Result<u8, String> {
     let root = args.root.canonicalize().map_err(|e| e.to_string())?;
     if !root.is_dir() {
         return Err("--root must name a directory".into());
+    }
+    if args.command == "workflow" {
+        return execute_workflows(args, &root);
     }
     let mut target_paths = args.targets.clone();
     if let Some(entry) = &args.entry {
@@ -543,7 +726,16 @@ fn execute(args: &Args) -> Result<u8, String> {
             return execute_targets(args, &root, &[]);
         }
     }
-    if args.java || args.command == "generate" || generated {
+    if args.java
+        || args.command == "generate"
+        || generated
+        || (!explicit_legacy
+            && matches!(
+                args.command.as_str(),
+                "check" | "inspect" | "compile" | "verify" | "source" | "evidence" | "review"
+            )
+            && !workflows::discover(&root)?.is_empty())
+    {
         return execute_java(args, &root, discover_targets);
     }
     if args.command == "init" {
@@ -594,6 +786,10 @@ fn execute(args: &Args) -> Result<u8, String> {
                 .ok_or("review requires --base <Git revision>")?,
             args.entry.as_deref(),
         )?;
+        result["workflow_changes"] = json!(workflows::review_changes(
+            &root,
+            args.base.as_deref().unwrap_or("HEAD")
+        )?);
         result["target_changes"] = json!(targets::review_changes(
             &root,
             args.base.as_deref().unwrap()

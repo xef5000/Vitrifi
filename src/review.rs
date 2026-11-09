@@ -87,14 +87,21 @@ pub fn review(root: &Path, base: &str, entry: Option<&Path>) -> Result<Value, St
             full.strip_prefix(&format!("{prefix}/"))
         };
         if let Some(path) = path {
-            if path.ends_with(".vitrifi") && !path.ends_with(".target.vitrifi") {
+            if path.ends_with(".vitrifi")
+                && !path.ends_with(".target.vitrifi")
+                && !path.ends_with(".workflow.vitrifi")
+            {
                 old_paths.insert(path.to_string(), full.to_string());
             }
         }
     }
     let current: BTreeSet<_> = repository_files(&root)?
         .into_iter()
-        .filter(|p| p.ends_with(".vitrifi") && !p.ends_with(".target.vitrifi"))
+        .filter(|p| {
+            p.ends_with(".vitrifi")
+                && !p.ends_with(".target.vitrifi")
+                && !p.ends_with(".workflow.vitrifi")
+        })
         .collect();
     let mut paths: BTreeSet<String> = current
         .union(&old_paths.keys().cloned().collect())

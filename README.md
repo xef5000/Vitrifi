@@ -8,6 +8,8 @@ The Rust core combines a `javac` analysis adapter with explicit Spring/JDBC runt
 
 Feature-local `.target.vitrifi` files now express independent design constraints: exact public Java interfaces, permitted effects, dependency boundaries, and runtime policies. `conform` compares those targets to source facts. The generated `.vitrifi` view still follows the implementation; regenerating it cannot widen a target. Start with the [target language and workflow guide](docs/targets.md).
 
+The compiled workflow pilot adds executable `.workflow.vitrifi` files: typed calls, branches and rejection paths generate a Spring service, while native Java actions are checked against declared effect bounds. Start with [compiled workflows](docs/workflows.md) and the [workflow checkout example](examples/workflow-checkout). Restricted workflow refactors can now carry [algebraic proof certificates](docs/proof-certificates.md), replayed by a separate checker with pinned Git, native-source and dependency inputs.
+
 Open the [interactive explainer](site/index.html) in a browser for before/after examples, a guide to generated syntax, and the boundaries of each check. It is a small static site that works directly from disk; see [site/README.md](site/README.md).
 
 ## Java/Spring: design, conform, generate, verify
@@ -34,7 +36,7 @@ The [Spring checkout example](examples/spring-checkout/README.md) uses a real se
 
 Start with the [Java/Spring guide](docs/java-spring.md) for annotations, generated-file review, test evidence, supported patterns, and limits. The generated view remains a file beside the feature; no web server or global authored manifest is required.
 
-## Earlier authored workflow
+## Earlier authored architecture language
 
 The v0.2 authored language remains available with Python, Ruby, JavaScript, TypeScript, and Java syntax adapters. Its checks validate declared relationships, binding existence, and resolved import boundaries. It does not provide the implementation agreement of the new Java/Spring workflow. Generation and runtime instrumentation for the other languages are future adapters.
 

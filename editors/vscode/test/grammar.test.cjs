@@ -275,3 +275,19 @@ test('all real feature modules tokenize completely without leaked declaration sc
     assert.ok(document.lines.some(line => line.tokens.some(token => token.scopes.includes('entity.name.function.vitrifi'))));
   }
 });
+
+
+test('compiled workflows highlight branches, immutable bindings and native actions', () => {
+  const source = fs.readFileSync(path.resolve(extension, '../../examples/workflow-checkout/src/main/java/dev/vitrifi/example/checkout/Checkout.Discounts.workflow.vitrifi'), 'utf8');
+  const document = tokenize(source);
+  has(document, 'workflow feature', 'workflow', 'storage.modifier.workflow.vitrifi');
+  has(document, 'actions java', 'java', 'support.constant.language.vitrifi');
+  has(document, 'action owns(', 'owns', 'entity.name.function.vitrifi');
+  has(document, 'let owner =', 'owner', 'variable.other.constant.vitrifi');
+  has(document, 'let owner =', 'owns', 'entity.name.function.vitrifi');
+  has(document, 'if owner {', 'if', 'keyword.control.flow.vitrifi');
+  has(document, 'reject "Only', 'reject', 'keyword.control.flow.vitrifi');
+  has(document, 'return receipt;', 'return', 'keyword.control.flow.vitrifi');
+  has(document, 'no_effect_on_rejection [', 'no_effect_on_rejection', 'keyword.control.policy.vitrifi');
+  assert.equal(document.stack.depth, 1);
+});

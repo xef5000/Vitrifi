@@ -326,6 +326,8 @@ pub fn build(mut analysis: SourceAnalysis) -> DerivedProgram {
                         (PolicyStatus::Passed, format!("No {} {} effect is reachable within this adapter's analyzed source graph and modeled boundaries", effect.action, effect.resource), Vec::new())
                     }
                 }
+                SourcePolicy::NoEffectOnRejection { effect } => (PolicyStatus::RuntimeRequired,
+                    format!("No {} {} on business rejection requires scenario-linked runtime evidence", effect.action, effect.resource), Vec::new()),
                 SourcePolicy::NoEffectOnError { effect } => (PolicyStatus::RuntimeRequired,
                     format!("No {} {} on error requires scenario-linked runtime evidence; static reachability does not establish error-path behavior", effect.action, effect.resource), Vec::new()),
             };

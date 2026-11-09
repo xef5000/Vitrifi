@@ -98,6 +98,22 @@ impl TargetSet {
 /// Review authored target changes independently of implementation facts.
 /// Historical targets are read as data; no historical build or test is executed.
 pub fn review_changes(root: &Path, base: &str) -> Result<Vec<Value>, String> {
+    review_file_changes(
+        root,
+        base,
+        ".target.vitrifi",
+        "authored_target",
+        "Review this target source diff separately; conformance does not approve policy changes.",
+    )
+}
+
+pub(crate) fn review_file_changes(
+    root: &Path,
+    base: &str,
+    suffix: &str,
+    provenance: &str,
+    message: &str,
+) -> Result<Vec<Value>, String> {
     fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
         let output = std::process::Command::new("git")
             .args(["-c", "core.fsmonitor=false", "-C"])
@@ -135,7 +151,7 @@ pub fn review_changes(root: &Path, base: &str) -> Result<Vec<Value>, String> {
         } else {
             full.strip_prefix(&format!("{prefix}/"))
         };
-        if let Some(path) = relative.filter(|p| p.ends_with(".target.vitrifi")) {
+        if let Some(path) = relative.filter(|p| p.ends_with(suffix)) {
             before.insert(
                 path.to_owned(),
                 compiler::hash_bytes(&git(&top, &["show", &format!("{revision}:{full}")])?),
@@ -143,8 +159,10 @@ pub fn review_changes(root: &Path, base: &str) -> Result<Vec<Value>, String> {
         }
     }
     let mut after = BTreeMap::new();
-    for path in discover(root)? {
-        let path = compiler::slash(&path);
+    for path in compiler::repository_files(root)?
+        .into_iter()
+        .filter(|p| p.ends_with(suffix))
+    {
         after.insert(
             path.clone(),
             compiler::hash_bytes(compiler::read_inside(root, &path)?.as_bytes()),
@@ -154,8 +172,8 @@ pub fn review_changes(root: &Path, base: &str) -> Result<Vec<Value>, String> {
     for path in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
         if before.get(path) != after.get(path) {
             changes.push(json!({"path":path,"change":if !before.contains_key(path){"added"}else if !after.contains_key(path){"removed"}else{"modified"},
-                "before_sha256":before.get(path),"after_sha256":after.get(path),"provenance":"authored_target",
-                "message":"Review this target source diff separately; conformance does not approve policy changes."}));
+                "before_sha256":before.get(path),"after_sha256":after.get(path),"provenance":provenance,
+                "message":message}));
         }
     }
     Ok(changes)
