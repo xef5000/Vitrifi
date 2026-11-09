@@ -1,0 +1,58 @@
+// Executable source of truth. The compiler emits DiscountService.java.
+workflow feature Checkout.Discounts {
+  purpose "Apply one valid coupon to the owner's cart without writes on rejection";
+  emit java "dev.vitrifi.example.checkout.DiscountService";
+  actions java "dev.vitrifi.example.checkout.CheckoutActions";
+  resource Carts table "carts";
+
+  action load(cartId: "java.lang.String") -> "dev.vitrifi.example.checkout.Cart" {
+    bind java "dev.vitrifi.example.checkout.CheckoutActions.load(java.lang.String)";
+    effects [read Carts];
+  }
+  action owns(actorId: "java.lang.String", cart: "dev.vitrifi.example.checkout.Cart") -> "boolean" {
+    bind java "dev.vitrifi.example.checkout.CheckoutActions.owns(java.lang.String,dev.vitrifi.example.checkout.Cart)";
+    effects [];
+  }
+  action validCode(code: "java.lang.String") -> "boolean" {
+    bind java "dev.vitrifi.example.checkout.CheckoutActions.validCode(java.lang.String)";
+    effects [];
+  }
+  action available(cart: "dev.vitrifi.example.checkout.Cart") -> "boolean" {
+    bind java "dev.vitrifi.example.checkout.CheckoutActions.available(dev.vitrifi.example.checkout.Cart)";
+    effects [];
+  }
+  action save(cart: "dev.vitrifi.example.checkout.Cart", code: "java.lang.String") -> "dev.vitrifi.example.checkout.Receipt" {
+    bind java "dev.vitrifi.example.checkout.CheckoutActions.save(dev.vitrifi.example.checkout.Cart,java.lang.String)";
+    effects [write Carts];
+  }
+
+  operation applyCoupon(actorId: "java.lang.String", cartId: "java.lang.String", code: "java.lang.String") -> "dev.vitrifi.example.checkout.Receipt" {
+    effects [read Carts, write Carts];
+    no_effect_on_rejection [write Carts];
+
+    let cart = call load(cartId);
+    let owner = call owns(actorId, cart);
+    if owner {
+    } else {
+      reject "Only the cart owner can apply a coupon";
+    }
+    let valid = call validCode(code);
+    if valid {
+    } else {
+      reject "Coupon is invalid";
+    }
+    let unused = call available(cart);
+    if unused {
+    } else {
+      reject "A coupon is already applied";
+    }
+    let receipt = call save(cart, code);
+    return receipt;
+  }
+
+  operation preview(cartId: "java.lang.String") -> "dev.vitrifi.example.checkout.Cart" {
+    effects [read Carts];
+    let cart = call load(cartId);
+    return cart;
+  }
+}
